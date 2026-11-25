@@ -129,12 +129,17 @@ fn has_wildcard(segment: &str) -> bool {
 /// A pattern whose last segment has no wildcard and no extension names a directory.
 fn pattern_glob(dir: &Path, pattern: &str) -> String {
     let joined = normalize(&dir.join(pattern));
-    let mut text = joined.to_string_lossy().into_owned();
+    let mut text = glob_text(&joined);
     let last = text.rsplit('/').next().unwrap_or_default();
     if !has_wildcard(last) && !last.contains('.') {
         text.push_str("/**/*");
     }
     text
+}
+
+/// A path as glob text: `/` separators, since globset reads `\\` as an escape (candidates are normalized for us).
+fn glob_text(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 /// tsconfig globs: `*` stays within one path segment, `**` crosses them.
@@ -149,7 +154,7 @@ fn glob_set(dir: &Path, patterns: &[String], directory_prefix: bool) -> Result<G
         let invalid = |error: globset::Error| Error::Tsconfig { path: dir.to_path_buf(), message: error.to_string() };
         builder.add(glob(&text).map_err(invalid)?);
         if directory_prefix && !has_wildcard(pattern) {
-            builder.add(glob(&format!("{}/**", normalize(&dir.join(pattern)).display())).map_err(invalid)?);
+            builder.add(glob(&format!("{}/**", glob_text(&normalize(&dir.join(pattern))))).map_err(invalid)?);
         }
     }
     builder.build().map_err(|error| Error::Tsconfig { path: dir.to_path_buf(), message: error.to_string() })
