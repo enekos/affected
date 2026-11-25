@@ -21,7 +21,7 @@ impl Git {
             return None;
         }
         let root = String::from_utf8(output.stdout).ok()?;
-        let root = PathBuf::from(root.trim_end()).canonicalize().ok()?;
+        let root = dunce::canonicalize(root.trim_end()).ok()?;
         Some(Self { root })
     }
 

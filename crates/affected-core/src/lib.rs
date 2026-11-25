@@ -152,7 +152,7 @@ pub enum Error {
 /// Fails when neither `base` nor `changed` is given, an entry or tsconfig is missing or
 /// invalid, or a git command fails.
 pub fn analyze(options: &Options) -> Result<Report, Error> {
-    let cwd = options.cwd.canonicalize().map_err(|source| Error::Io { path: options.cwd.clone(), source })?;
+    let cwd = dunce::canonicalize(&options.cwd).map_err(|source| Error::Io { path: options.cwd.clone(), source })?;
     let git = Git::discover(&cwd);
     let root = git.as_ref().map_or_else(|| cwd.clone(), |git| git.root().to_path_buf());
     let entries: Vec<(&str, Entry)> =

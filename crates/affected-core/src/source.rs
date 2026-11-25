@@ -46,8 +46,9 @@ impl FileSystem for Disk {
     fn read_link(&self, path: &Path) -> Result<PathBuf, ResolveError> {
         self.0.read_link(path)
     }
+    /// Without the `\\?\` verbatim prefix on Windows, so resolved paths compare equal to git's.
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
-        self.0.canonicalize(path)
+        self.0.canonicalize(path).map(|canonical| dunce::simplified(&canonical).to_path_buf())
     }
 }
 
