@@ -1,0 +1,32 @@
+{
+  "name": "@enekos/affected-win32-x64-msvc",
+  "version": "0.1.0",
+  "cpu": [
+    "x64"
+  ],
+  "main": "affected.win32-x64-msvc.node",
+  "files": [
+    "affected.win32-x64-msvc.node"
+  ],
+  "description": "Which TypeScript entry points does this diff reach? A Rust import graph over both sides of a git diff.",
+  "keywords": [
+    "typescript",
+    "affected",
+    "dependency-graph",
+    "monorepo",
+    "ci",
+    "git",
+    "diff"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/enekos/affected.git"
+  },
+  "os": [
+    "win32"
+  ]
+}

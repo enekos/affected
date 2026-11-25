@@ -1,0 +1,32 @@
+{
+  "name": "@enekos/affected-darwin-arm64",
+  "version": "0.1.0",
+  "cpu": [
+    "arm64"
+  ],
+  "main": "affected.darwin-arm64.node",
+  "files": [
+    "affected.darwin-arm64.node"
+  ],
+  "description": "Which TypeScript entry points does this diff reach? A Rust import graph over both sides of a git diff.",
+  "keywords": [
+    "typescript",
+    "affected",
+    "dependency-graph",
+    "monorepo",
+    "ci",
+    "git",
+    "diff"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/enekos/affected.git"
+  },
+  "os": [
+    "darwin"
+  ]
+}

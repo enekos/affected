@@ -1,0 +1,35 @@
+{
+  "name": "@enekos/affected-linux-arm64-musl",
+  "version": "0.1.0",
+  "cpu": [
+    "arm64"
+  ],
+  "main": "affected.linux-arm64-musl.node",
+  "files": [
+    "affected.linux-arm64-musl.node"
+  ],
+  "description": "Which TypeScript entry points does this diff reach? A Rust import graph over both sides of a git diff.",
+  "keywords": [
+    "typescript",
+    "affected",
+    "dependency-graph",
+    "monorepo",
+    "ci",
+    "git",
+    "diff"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/enekos/affected.git"
+  },
+  "os": [
+    "linux"
+  ],
+  "libc": [
+    "musl"
+  ]
+}

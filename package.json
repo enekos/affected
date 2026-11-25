@@ -1,0 +1,65 @@
+{
+  "name": "@enekos/affected",
+  "version": "0.1.0",
+  "description": "Which TypeScript entry points does this diff reach? A Rust import graph over both sides of a git diff.",
+  "keywords": [
+    "typescript",
+    "affected",
+    "dependency-graph",
+    "monorepo",
+    "ci",
+    "git",
+    "diff"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/enekos/affected.git"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "affected": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "native.cjs",
+    "native.d.cts"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "napi": {
+    "binaryName": "affected",
+    "targets": [
+      "aarch64-apple-darwin",
+      "x86_64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-musl",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "scripts": {
+    "build:native": "napi build --platform --release --manifest-path crates/affected-node/Cargo.toml --output-dir . --js native.cjs --dts native.d.cts",
+    "build:ts": "tsc -p tsconfig.json",
+    "build": "pnpm build:native && pnpm build:ts",
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "prepublishOnly": "napi pre-publish -t npm && pnpm build:ts",
+    "version": "napi version"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.11.1",
+    "@types/node": "^24.19.4",
+    "typescript": "7.0.2"
+  },
+  "packageManager": "pnpm@10.34.9"
+}
