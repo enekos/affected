@@ -66,7 +66,7 @@
     "build": "pnpm build:native && pnpm build:ts",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.test.json",
-    "prepublishOnly": "napi pre-publish -t npm && pnpm build:ts",
+    "prepublishOnly": "pnpm build:ts && napi pre-publish -t npm --no-gh-release",
     "version": "napi version"
   },
   "devDependencies": {
