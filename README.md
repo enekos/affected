@@ -34,12 +34,13 @@ Prebuilt for macOS (arm64, x64), Linux (x64, arm64; glibc and musl) and Windows 
 
 | Option | | |
 |---|---|---|
-| `entries` | `Record<name, string \| string[]>` | A `tsconfig.json` (its `files` + `include`, resolved with its `paths`, `extends` and `customConditions`), or source files resolved with their nearest tsconfig. |
-| `base` | `string` | Compare against the merge base of this ref and `HEAD`. Changed files come from git. |
+| `entries` | `Record<name, string \| string[] \| { from, inputs }>` | A `tsconfig.json` (its `files` + `include` and every project it `references`, resolved with its `paths`, `extends` and `customConditions`), or source files resolved with their nearest tsconfig. `inputs` are globs whose changes hit the entry although no import reaches them. |
+| `base` | `string` | Compare against the merge base of this ref and `HEAD`. Changed files come from git. `'auto'` uses `AFFECTED_BASE`, else the CI pull request's target branch (GitHub, GitLab, Buildkite, Bitbucket, Azure), else `origin/HEAD`. |
 | `changed` | `string[]` | The changed files. Required without `base`; with `base`, overrides git's list. |
 | `cwd` | `string` | Paths in and out are relative to it. Default `process.cwd()`. |
 | `uncommitted` | `boolean` | With `base`, count uncommitted and untracked files. Default `true`. |
 | `types` | `boolean` | Follow `import type` edges. Default `true`. |
+| `globals` | `string[]` | Globs whose changes hit every entry, such as `pnpm-lock.yaml` or a shared build config. |
 
 `affectedAsync` runs on the libuv thread pool.
 
@@ -68,15 +69,33 @@ if npx @enekos/affected -e jobs=packages/jobs-prompts/tsconfig.json -b origin/ma
 git diff --name-only HEAD~1 | npx @enekos/affected -e jobs=… -c -   # changed files from stdin
 ```
 
-`--json` prints the full report; `--committed` ignores uncommitted work; `--no-types` skips `import type`.
+`--json` prints the full report; `--names` prints the hit entry names one per line; `--github-output`
+appends `affected=["…"]` and `any=true|false` to `$GITHUB_OUTPUT`; `--committed` ignores uncommitted work;
+`--no-types` skips `import type`; `-g <glob>` adds a global input, `-i <name>=<glob>` an entry input.
 Exit codes with `--exit-code`: 0 hit, 1 not hit, 2 error.
 
 ## What counts as an edge
 
-Static imports and re-exports, `import()` and `require()` with a literal, `import x = require()`, and
-`import('…')` types. Resolution follows tsconfig `paths`/`baseUrl`, package.json `imports`/`exports`
-with `customConditions`, and `.js` → `.ts` extension aliasing. Files in `node_modules` and outside the
-repository are leaves. A changed tsconfig in an entry's `extends` chain hits that entry.
+- **Modules:** static imports and re-exports, `import()` and `require()` with a literal,
+  `import x = require()`, `import('…')` types, `require.resolve()`, `/// <reference types>`, and the
+  module named by `jest.mock`/`vi.mock` and their `requireActual`/`importActual` relatives.
+- **Globs:** `import.meta.glob`, `require.context`, and template-literal or concatenated `import()`/`require()`
+  with a static directory (`` import(`./locales/${l}.json`) `` → `./locales/*.json`). A file the diff adds
+  that matches the glob hits.
+- **Files and assets:** `/// <reference path>`, `new URL('./x', import.meta.url)`, and
+  `join(__dirname, 'a', 'b')`/`path.resolve(import.meta.dirname, …)` with literal segments. A directory
+  stands for every file below it.
+- **Components:** the `<script>` blocks of `.vue` and `.svelte` files and Astro frontmatter.
+- **Manifests:** a workspace package reached through `node_modules` brings its `package.json`, so
+  retargeting `exports` hits. An installed package is a leaf that stands for its version range in the
+  nearest `package.json` declaring it: a bump hits exactly the files importing the bumped package, and
+  other `package.json` edits hit nothing. Lockfile-only changes need `globals`.
+- **Configs:** every config in an entry's `extends` chain, including package configs, and every
+  referenced project.
+
+Resolution follows tsconfig `paths`/`baseUrl`, package.json `imports`/`exports` with
+`customConditions`, and `.js` → `.ts` extension aliasing. Files in `node_modules` and outside the
+repository are leaves. The fork-point graph reads `node_modules` from the working tree's install.
 
 ## Speed
 
@@ -89,8 +108,10 @@ On a 5,166-file TypeScript service (Apple M-series, 12 threads), compared with
 | `affected`, `changed` given (working tree only) | ~110 ms |
 | `affected`, `base` given (working tree + fork point) | ~170 ms |
 | `affected`, a 53-file entry, `base` given | ~58 ms |
+| `affected`, 1,183 entries (one per test file), `base` given | ~220 ms |
 
-The fork point reuses the working tree's parse for every file the diff did not touch and reads the
+Entries run in parallel and share resolvers and each file's resolved imports, so a large set of entries
+costs little more than their union. The fork point reuses the working tree's parse for every file the diff did not touch and reads the
 rest through one `git cat-file --batch` process per worker thread.
 
 ## License
