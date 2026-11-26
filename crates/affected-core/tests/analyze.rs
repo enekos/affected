@@ -238,3 +238,102 @@ fn reports_missing_inputs() {
     let no_changes = Options::new(repo.path()).entry("app", Entry::Files(vec!["index.ts".into()]));
     assert!(matches!(analyze(&no_changes), Err(affected_core::Error::NoChanges)));
 }
+
+#[test]
+fn a_solution_tsconfig_reaches_its_referenced_projects() {
+    let repo = Repo::new(&[
+        ("tsconfig.json", r#"{ "files": [], "references": [{ "path": "./tsconfig.app.json" }, { "path": "lib" }] }"#),
+        ("tsconfig.app.json", r#"{ "include": ["src"] }"#),
+        ("src/index.ts", "export {}"),
+        ("lib/tsconfig.json", r#"{ "include": ["*.ts"] }"#),
+        ("lib/a.ts", "export {}"),
+    ]);
+    repo.write(&[("lib/a.ts", "export const a = 1")]);
+    let report = repo.analyze(config("tsconfig.json"));
+    assert_eq!(report.hits, ["lib/a.ts"]);
+    assert!(report.files.contains(&"src/index.ts".to_owned()));
+}
+
+#[test]
+fn a_package_extends_is_followed_through_node_modules() {
+    let repo = Repo::new(&[
+        (".gitignore", "node_modules\n"),
+        ("config/package.json", r#"{ "name": "@ws/config" }"#),
+        ("config/base.json", r#"{ "compilerOptions": { "allowJs": true } }"#),
+        ("app/tsconfig.json", r#"{ "extends": "@ws/config/base.json", "include": ["src"] }"#),
+        ("app/src/index.js", "export {}"),
+    ]);
+    fs::create_dir_all(repo.path().join("app/node_modules/@ws")).unwrap();
+    symlink_dir(&repo.path().join("config"), &repo.path().join("app/node_modules/@ws/config"));
+    repo.write(&[("config/base.json", r#"{ "compilerOptions": { "allowJs": true, "strict": true } }"#)]);
+    let report = repo.analyze(config("app/tsconfig.json"));
+    assert_eq!(report.hits, ["config/base.json"]);
+    assert!(report.files.contains(&"app/src/index.js".to_owned()));
+}
+
+#[cfg(unix)]
+fn symlink_dir(target: &Path, link: &Path) {
+    std::os::unix::fs::symlink(target, link).unwrap();
+}
+
+#[cfg(windows)]
+fn symlink_dir(target: &Path, link: &Path) {
+    std::os::windows::fs::symlink_dir(target, link).unwrap();
+}
+
+#[test]
+fn a_dependency_bump_hits_the_files_importing_it() {
+    let repo = Repo::new(&[
+        ("package.json", r#"{ "dependencies": { "zod": "^3.0.0", "left-pad": "1.0.0" } }"#),
+        ("a.ts", "import { z } from 'zod'"),
+        ("b.ts", "import pad from 'left-pad'"),
+    ]);
+    repo.write(&[("package.json", r#"{ "dependencies": { "zod": "^3.1.0", "left-pad": "1.0.0" }, "scripts": {} }"#)]);
+    let options = Options::new(repo.path())
+        .entry("a", Entry::Files(vec!["a.ts".into()]))
+        .entry("b", Entry::Files(vec!["b.ts".into()]))
+        .base("main");
+    let report = analyze(&options).unwrap();
+    assert_eq!(report.entries[0].hits, ["package.json#zod"]);
+    assert_eq!(report.entries[0].chain, ["a.ts", "package.json#zod"]);
+    assert_eq!(report.entries[0].files, ["a.ts"]);
+    assert!(!report.entries[1].is_hit());
+    assert_eq!(report.changed, ["package.json"]);
+}
+
+#[test]
+fn globs_and_asset_paths_are_edges() {
+    let repo = Repo::new(&[
+        ("main.ts", "import.meta.glob('./pages/*.ts')\nreadFileSync(join(__dirname, 'prompts', 'a.md'))"),
+        ("pages/a.ts", "export {}"),
+        ("prompts/a.md", "hi"),
+    ]);
+    repo.write(&[("pages/b.ts", "export {}"), ("prompts/a.md", "hello")]);
+    let report = repo.analyze(Entry::Files(vec!["main.ts".into()]));
+    assert_eq!(report.hits, ["pages/b.ts", "prompts/a.md"]);
+}
+
+#[test]
+fn an_entry_deleted_by_the_change_hits_through_the_fork_point() {
+    let repo = Repo::new(&[("main.ts", "import './a'"), ("a.ts", "export {}")]);
+    repo.branch("change");
+    repo.remove("main.ts");
+    repo.commit("drop entry");
+    assert_eq!(repo.analyze(Entry::Files(vec!["main.ts".into()])).hits, ["main.ts"]);
+}
+
+#[test]
+fn global_and_entry_inputs_hit_without_an_import() {
+    let repo =
+        Repo::new(&[("a.ts", "export {}"), ("b.ts", "export {}"), ("pnpm-lock.yaml", "v1"), ("templates/a.hbs", "hi")]);
+    repo.write(&[("pnpm-lock.yaml", "v2"), ("templates/a.hbs", "hello")]);
+    let entries = Options::new(repo.path())
+        .entry("a", Entry::Files(vec!["a.ts".into()]))
+        .entry("b", Entry::Files(vec!["b.ts".into()]))
+        .base("main");
+    let report = analyze(&entries.clone().inputs("a", vec!["templates/**".into()])).unwrap();
+    assert_eq!(report.entries[0].hits, ["templates/a.hbs"]);
+    assert!(!report.entries[1].is_hit());
+    let report = analyze(&entries.globals(vec!["pnpm-lock.yaml".into()])).unwrap();
+    assert_eq!(report.entries[1].chain, ["pnpm-lock.yaml"]);
+}

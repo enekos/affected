@@ -8,13 +8,17 @@
 mod git;
 mod graph;
 mod imports;
+mod manifest;
 mod source;
 mod tsconfig;
 
 use std::path::{Component, Path, PathBuf};
 
 use git::Git;
-use graph::{Graph, ParseCache};
+use globset::GlobSet;
+use graph::{Graph, ParseCache, Walker};
+use oxc_resolver::FileSystem;
+use rayon::prelude::*;
 use source::{Disk, GitTree};
 
 /// Where an entry's import graph starts.
@@ -61,12 +65,26 @@ pub struct Options {
     pub uncommitted: bool,
     /// Follow type-only imports.
     pub types: bool,
+    /// Globs, relative to `cwd`: a changed file matching one hits every entry.
+    pub globals: Vec<String>,
+    /// Per-entry globs, relative to `cwd`: a changed file matching one hits that entry.
+    /// For inputs no import reveals, such as templates read at runtime.
+    pub inputs: Vec<(String, Vec<String>)>,
 }
 
 impl Options {
     #[must_use]
     pub fn new(cwd: impl Into<PathBuf>) -> Self {
-        Self { cwd: cwd.into(), entries: Vec::new(), base: None, changed: None, uncommitted: true, types: true }
+        Self {
+            cwd: cwd.into(),
+            entries: Vec::new(),
+            base: None,
+            changed: None,
+            uncommitted: true,
+            types: true,
+            globals: Vec::new(),
+            inputs: Vec::new(),
+        }
     }
 
     #[must_use]
@@ -96,6 +114,18 @@ impl Options {
     #[must_use]
     pub fn types(mut self, types: bool) -> Self {
         self.types = types;
+        self
+    }
+
+    #[must_use]
+    pub fn globals(mut self, globs: Vec<String>) -> Self {
+        self.globals = globs;
+        self
+    }
+
+    #[must_use]
+    pub fn inputs(mut self, entry: impl Into<String>, globs: Vec<String>) -> Self {
+        self.inputs.push((entry.into(), globs));
         self
     }
 }
@@ -135,6 +165,12 @@ pub enum Error {
     NoChanges,
     #[error("`base` needs a git repository at {0}")]
     NotARepository(PathBuf),
+    #[error(
+        "no merge base with {0}: this is a shallow clone. Fetch history first (actions/checkout `fetch-depth: 0`, or `git fetch --unshallow`)"
+    )]
+    ShallowClone(String),
+    #[error("invalid glob {glob}: {message}")]
+    Glob { glob: String, message: String },
     #[error("entry not found: {0}")]
     EntryNotFound(PathBuf),
     #[error("invalid tsconfig {path}: {message}")]
@@ -171,7 +207,6 @@ pub fn analyze(options: &Options) -> Result<Report, Error> {
     changed.sort();
     changed.dedup();
 
-    let disk = Disk::new();
     let cache = ParseCache::default();
     let base_tree = match (&fork_point, &git) {
         (Some(commit), Some(git)) => {
@@ -184,35 +219,79 @@ pub fn analyze(options: &Options) -> Result<Report, Error> {
         }
         _ => None,
     };
-
-    let mut reports = Vec::with_capacity(entries.len());
-    for (name, entry) in &entries {
-        let (head, base) = rayon::join(
-            || graph::build(&disk, &root, entry, options.types, &cache),
-            || base_tree.as_ref().map(|tree| build_base(tree, &root, entry, options.types, &cache)).transpose(),
-        );
-        reports.push(report(name, &cwd, &changed, &head?, base?.as_ref()));
+    let head = Walker::new(Disk::new(), &root, options.types, &cache);
+    let base = base_tree.map(|tree| Walker::new(tree, &root, options.types, &cache));
+    for (_, entry) in &entries {
+        ensure_exists(entry, head.source(), base.as_ref().map(Walker::source))?;
     }
-    Ok(Report { changed: changed.iter().map(|path| relative(&cwd, path)).collect(), entries: reports })
+    changed.extend(graph::changed_dependencies(head.source(), base.as_ref().map(Walker::source), &changed));
+
+    let globals = globs(&cwd, &options.globals)?;
+    // Entries share the walkers' caches, so running them side by side also spreads the
+    // resolution work; `collect` keeps declaration order.
+    let reports = entries
+        .par_iter()
+        .map(|(name, entry)| {
+            let (head_graph, base_graph) =
+                rayon::join(|| head.build(entry), || base.as_ref().map(|base| base.build(entry)).transpose());
+            let inputs = options.inputs.iter().filter(|(entry, _)| entry == name).flat_map(|(_, globs)| globs);
+            let inputs = globs(&cwd, &inputs.cloned().collect::<Vec<_>>())?;
+            let matched = |path: &PathBuf| globals.is_match(path) || inputs.is_match(path);
+            Ok(report(name, &cwd, &changed, &head_graph?, base_graph?.as_ref(), matched))
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    let changed = changed.iter().filter(|path| !manifest::is_dependency_node(path));
+    Ok(Report { changed: changed.map(|path| relative(&cwd, path)).collect(), entries: reports })
 }
 
-/// An entry that does not exist at the fork point was added by the change: an empty graph.
-fn build_base(tree: &GitTree, root: &Path, entry: &Entry, types: bool, cache: &ParseCache) -> Result<Graph, Error> {
-    match graph::build(tree, root, entry, types, cache) {
-        Err(Error::EntryNotFound(_)) => Ok(Graph::default()),
-        other => other,
+/// Every entry path must exist on at least one side of the diff: an entry the change adds
+/// or deletes is fine, a typo is not.
+fn ensure_exists(entry: &Entry, head: &Disk, base: Option<&GitTree>) -> Result<(), Error> {
+    let exists = |path: &Path| head.metadata(path).is_ok() || base.is_some_and(|base| base.metadata(path).is_ok());
+    let paths = match entry {
+        Entry::Tsconfig(path) => std::slice::from_ref(path),
+        Entry::Files(files) => files.as_slice(),
+    };
+    match paths.iter().find(|path| !exists(path)) {
+        Some(missing) => Err(Error::EntryNotFound(missing.clone())),
+        None => Ok(()),
     }
 }
 
-fn report(name: &str, cwd: &Path, changed: &[PathBuf], head: &Graph, base: Option<&Graph>) -> EntryReport {
+fn globs(cwd: &Path, patterns: &[String]) -> Result<GlobSet, Error> {
+    let mut builder = globset::GlobSetBuilder::new();
+    for pattern in patterns {
+        let text = tsconfig::normalize(&cwd.join(pattern)).to_string_lossy().replace('\\', "/");
+        let glob = globset::GlobBuilder::new(&text)
+            .literal_separator(true)
+            .build()
+            .map_err(|error| Error::Glob { glob: pattern.clone(), message: error.to_string() })?;
+        builder.add(glob);
+    }
+    builder.build().map_err(|error| Error::Glob { glob: patterns.join(", "), message: error.to_string() })
+}
+
+fn report(
+    name: &str,
+    cwd: &Path,
+    changed: &[PathBuf],
+    head: &Graph,
+    base: Option<&Graph>,
+    matched: impl Fn(&PathBuf) -> bool,
+) -> EntryReport {
     let graphs: Vec<&Graph> = std::iter::once(head).chain(base).collect();
-    let mut files: Vec<&PathBuf> = graphs.iter().flat_map(|graph| graph.files.iter()).collect();
+    let mut files: Vec<&PathBuf> =
+        graphs.iter().flat_map(|graph| graph.files.iter()).filter(|path| !manifest::is_dependency_node(path)).collect();
     files.sort();
     files.dedup();
-    let hits: Vec<&PathBuf> = changed.iter().filter(|path| graphs.iter().any(|graph| graph.contains(path))).collect();
+    let hits: Vec<&PathBuf> =
+        changed.iter().filter(|path| matched(path) || graphs.iter().any(|graph| graph.contains(path))).collect();
     let chain = hits
         .iter()
-        .flat_map(|path| graphs.iter().filter_map(|graph| graph.chain(path)))
+        .flat_map(|path| {
+            let input = matched(path).then(|| vec![(*path).clone()]);
+            graphs.iter().filter_map(|graph| graph.chain(path)).chain(input)
+        })
         .min_by_key(Vec::len)
         .unwrap_or_default();
     EntryReport {

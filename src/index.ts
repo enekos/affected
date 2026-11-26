@@ -4,12 +4,21 @@ import type * as Native from '../native.cjs'
 const native: typeof Native = createRequire(import.meta.url)('../native.cjs')
 
 /** A tsconfig path, or one or more source files resolved with their nearest tsconfig. */
-export type EntryInput = string | readonly string[]
+export type EntryPaths = string | readonly string[]
+
+/**
+ * An entry's paths, or its paths plus `inputs`: globs (relative to `cwd`) whose changes hit
+ * the entry although no import reaches them, such as templates read at runtime.
+ */
+export type EntryInput = EntryPaths | { readonly from: EntryPaths; readonly inputs?: readonly string[] }
 
 export interface AffectedOptions<Name extends string = string> {
   /** Named starting points of the import graph. */
   entries: Readonly<Record<Name, EntryInput>>
-  /** Compare against the fork point of this ref. Changed files come from git unless `changed` is set. */
+  /**
+   * Compare against the fork point of this ref. Changed files come from git unless `changed` is set.
+   * `'auto'` picks the CI pull request's target branch; see {@link detectBase}.
+   */
   base?: string
   /** The changed files, relative to `cwd`. Required without `base`. */
   changed?: readonly string[]
@@ -19,6 +28,8 @@ export interface AffectedOptions<Name extends string = string> {
   uncommitted?: boolean
   /** Follow `import type` edges. Defaults to `true`. */
   types?: boolean
+  /** Globs (relative to `cwd`) whose changes hit every entry, such as a lockfile or a shared config. */
+  globals?: readonly string[]
 }
 
 export interface Entry<Name extends string = string> {
@@ -91,18 +102,41 @@ function describe(entry: Entry): string {
   return `${entry.name}  ← ${changed}${others}${via.length ? `  via ${via.join(' → ')}` : ''}`
 }
 
-function toNative({ cwd, entries, base, changed, uncommitted, types }: AffectedOptions): Native.NativeOptions {
+function toPaths(paths: EntryPaths): string[] {
+  return typeof paths === 'string' ? [paths] : [...paths]
+}
+
+function toNativeEntry([name, input]: [string, EntryInput]): Native.NativeEntry {
+  if (typeof input === 'string' || Array.isArray(input)) return { name, paths: toPaths(input as EntryPaths) }
+  const { from, inputs } = input as Exclude<EntryInput, EntryPaths>
+  return { name, paths: toPaths(from), ...(inputs !== undefined && { inputs: [...inputs] }) }
+}
+
+function toNative({ cwd, entries, base, changed, uncommitted, types, globals }: AffectedOptions): Native.NativeOptions {
   return {
     cwd: cwd ?? process.cwd(),
-    entries: Object.entries<EntryInput>(entries).map(([name, input]) => ({
-      name,
-      paths: typeof input === 'string' ? [input] : [...input],
-    })),
-    ...(base !== undefined && { base }),
+    entries: Object.entries<EntryInput>(entries).map(toNativeEntry),
+    ...(base !== undefined && { base: base === 'auto' ? detectBase() : base }),
     ...(changed !== undefined && { changed: [...changed] }),
     ...(uncommitted !== undefined && { uncommitted }),
     ...(types !== undefined && { types }),
+    ...(globals !== undefined && { globals: [...globals] }),
   }
+}
+
+/**
+ * The base `base: 'auto'` stands for: `AFFECTED_BASE`, else the target branch of the pull
+ * or merge request CI is building, else `origin/HEAD`.
+ */
+export function detectBase(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.AFFECTED_BASE) return env.AFFECTED_BASE
+  const target =
+    env.GITHUB_BASE_REF ||
+    env.CI_MERGE_REQUEST_TARGET_BRANCH_NAME ||
+    env.BUILDKITE_PULL_REQUEST_BASE_BRANCH ||
+    env.BITBUCKET_PR_DESTINATION_BRANCH ||
+    env.SYSTEM_PULLREQUEST_TARGETBRANCH?.replace(/^refs\/heads\//, '')
+  return target ? `origin/${target}` : 'origin/HEAD'
 }
 
 /**

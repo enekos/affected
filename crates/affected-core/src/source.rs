@@ -117,6 +117,13 @@ impl GitTree {
     }
 }
 
+/// Installed packages are not in git. Paths through `node_modules` are read from the
+/// working tree's install, so workspace packages and package configs still resolve; a
+/// symlinked workspace package canonicalizes back into the tree.
+fn is_installed(path: &Path) -> bool {
+    path.components().any(|part| part.as_os_str() == "node_modules")
+}
+
 impl FileSystem for GitTree {
     fn new() -> Self {
         Self(Arc::new(TreeIndex {
@@ -128,6 +135,9 @@ impl FileSystem for GitTree {
         }))
     }
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        if is_installed(path) {
+            return fs::read(path);
+        }
         let object = self.0.blobs.get(path).ok_or_else(|| Self::not_found(path))?;
         if self.matches_disk(path) {
             return fs::read(path);
@@ -139,6 +149,9 @@ impl FileSystem for GitTree {
         String::from_utf8(self.read(path)?).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
     fn metadata(&self, path: &Path) -> io::Result<FileMetadata> {
+        if is_installed(path) {
+            return Disk::new().metadata(path);
+        }
         if self.0.blobs.contains_key(path) {
             Ok(FileMetadata::new(true, false, false))
         } else if self.0.dirs.contains(path) {
@@ -148,12 +161,21 @@ impl FileSystem for GitTree {
         }
     }
     fn symlink_metadata(&self, path: &Path) -> io::Result<FileMetadata> {
+        if is_installed(path) {
+            return Disk::new().symlink_metadata(path);
+        }
         self.metadata(path)
     }
     fn read_link(&self, path: &Path) -> Result<PathBuf, ResolveError> {
+        if is_installed(path) {
+            return Disk::new().read_link(path);
+        }
         Err(ResolveError::from(Self::not_found(path)))
     }
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        if is_installed(path) {
+            return Disk::new().canonicalize(path);
+        }
         self.metadata(path).map(|_| path.to_path_buf())
     }
 }
