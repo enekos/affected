@@ -49,6 +49,11 @@ pnpm build && pnpm typecheck && pnpm test
    (napi updates `npm/*`).
 2. Move *Unreleased* in `CHANGELOG.md` to a `## [x.y.z] - YYYY-MM-DD` section.
 3. Merge, then tag: `git tag vx.y.z && git push origin vx.y.z`.
+4. Wait for the `Release` workflow, then publish from a clean checkout of the tag:
+   `git checkout vx.y.z && scripts/publish.sh`. It prints a browser login link for npm; pass a 2FA code as
+   the argument to skip that.
 
-The `Release` workflow checks the versions, runs CI, publishes every npm package with provenance (the
-`npm` environment), and creates the GitHub release with the binaries attached.
+The `Release` workflow checks the versions, runs CI, and creates the GitHub release with the binaries
+attached. It does not publish to npm. `scripts/publish.sh` downloads those binaries, packs the seven
+platform packages and the root package, and publishes them in that order. It skips packages already on
+npm, so if a login times out part-way, run it again.
