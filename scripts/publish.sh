@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Publish the version in package.json to npm from this machine.
 #
-#   scripts/publish.sh <otp>
+#   scripts/publish.sh [otp]
 #
 # Run it on a clean checkout of tag v<version>, after the Release workflow has created the GitHub
-# release with the binaries attached. Packages already on npm are skipped, so when the 2FA code
-# expires part-way, run it again with a fresh one.
+# release with the binaries attached. Without a 2FA code, npm prints a link to log in through the
+# browser. Packages already on npm are skipped, so if a login times out, run it again.
 set -euo pipefail
 
-otp=${1:?usage: scripts/publish.sh <npm 2FA code>}
+otp_args=()
+[[ -n ${1:-} ]] && otp_args=(--otp "$1")
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 
@@ -49,7 +50,7 @@ for tgz in "$work"/platform/*.tgz "$work"/root/*.tgz; do
     echo "skip $name@$version (already published)"
     continue
   fi
-  npm publish "$tgz" --access public --tag "$dist_tag" --otp "$otp"
+  npm publish "$tgz" --access public --tag "$dist_tag" --auth-type web ${otp_args[@]+"${otp_args[@]}"}
 done
 
 echo "published @enekos/affected@$version ($dist_tag)"
