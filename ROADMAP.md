@@ -17,8 +17,8 @@ comes before speed.
 
 ## 0.1 — ship
 
-- [ ] Green CI on all 7 napi targets, then tag `v0.1.0` and publish `@enekos/affected` with npm trusted
-      publishing (provenance).
+- [ ] Green CI on all 7 napi targets, then tag `v0.1.0` and publish `@enekos/affected` from a local
+      machine (`scripts/publish.sh`).
 - [ ] Publish `affected-core` to crates.io, plus a `affected` Rust binary (`cargo binstall`) for
       non-Node CI.
 - [ ] A GitHub Actions example in the README: `fetch-depth: 0`, `--base auto`, `--github-output`.
