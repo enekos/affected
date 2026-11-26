@@ -19,6 +19,11 @@
     "diff"
   ],
   "license": "MIT",
+  "homepage": "https://enekos.github.io/affected/",
+  "bugs": {
+    "url": "https://github.com/enekos/affected/issues"
+  },
+  "author": "Eneko Sarasola (https://github.com/enekos)",
   "engines": {
     "node": ">=20"
   },
@@ -28,5 +33,9 @@
   },
   "os": [
     "darwin"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
 }

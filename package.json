@@ -5,13 +5,23 @@
   "keywords": [
     "typescript",
     "affected",
+    "changed",
     "dependency-graph",
+    "import-graph",
     "monorepo",
     "ci",
+    "test-selection",
     "git",
-    "diff"
+    "diff",
+    "tsconfig",
+    "oxc"
   ],
   "license": "MIT",
+  "homepage": "https://enekos.github.io/affected/",
+  "bugs": {
+    "url": "https://github.com/enekos/affected/issues"
+  },
+  "author": "Eneko Sarasola (https://github.com/enekos)",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/enekos/affected.git"
@@ -30,7 +40,10 @@
   "files": [
     "dist",
     "native.cjs",
-    "native.d.cts"
+    "native.d.cts",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=20"
@@ -61,5 +74,9 @@
     "@types/node": "^24.19.4",
     "typescript": "7.0.2"
   },
-  "packageManager": "pnpm@10.34.9"
+  "packageManager": "pnpm@10.34.9",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
 }
