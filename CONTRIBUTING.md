@@ -15,7 +15,7 @@ issue first so we can agree on the shape.
 
 ## Setup
 
-Rust (stable, MSRV 1.89), Node ≥ 22 and pnpm.
+Rust (stable, MSRV 1.98), Node ≥ 22 and pnpm.
 
 ```sh
 pnpm install
