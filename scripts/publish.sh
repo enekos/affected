@@ -4,8 +4,9 @@
 #   scripts/publish.sh [otp]
 #
 # Run it on a clean checkout of tag v<version>, after the Release workflow has created the GitHub
-# release with the binaries attached. Without a 2FA code, npm prints a link to log in through the
-# browser. Packages already on npm are skipped, so if a login times out, run it again.
+# release with the binaries attached. Without a 2FA code, each npm login page opens in the browser;
+# approve it and publishing continues. Packages already on npm are skipped, so if a login times out,
+# run it again.
 set -euo pipefail
 
 otp_args=()
@@ -22,7 +23,21 @@ test -z "$(git status --porcelain)" || { echo "working tree is not clean" >&2; e
 test "$(git rev-parse HEAD)" = "$(git rev-parse "$tag^{commit}")" || { echo "HEAD is not $tag" >&2; exit 1; }
 
 work=$(mktemp -d)
-trap 'git checkout -q -- package.json npm; rm -f ./*.node; rm -rf "$work"' EXIT
+log="$work/npm.log"
+touch "$log"
+
+# npm waits for a browser login only on a terminal: publish under script(1) and open each login link.
+# shellcheck disable=SC2013
+( opened=" "
+  while sleep 1; do
+    for url in $(grep -o 'https://www.npmjs.com/auth/cli/[A-Za-z0-9_-]*' "$log" | sort -u); do
+      [[ $opened == *" $url "* ]] && continue
+      open "$url" 2>/dev/null || xdg-open "$url" 2>/dev/null || echo "log in to npm: $url" >&2
+      opened="$opened$url "
+    done
+  done ) &
+watcher=$!
+trap 'kill "$watcher" 2>/dev/null; git checkout -q -- package.json npm; rm -f ./*.node; rm -rf "$work"' EXIT
 
 gh release download "$tag" --pattern '*.node' --dir "$work/bindings"
 pnpm install --frozen-lockfile
@@ -50,7 +65,13 @@ for tgz in "$work"/platform/*.tgz "$work"/root/*.tgz; do
     echo "skip $name@$version (already published)"
     continue
   fi
-  npm publish "$tgz" --access public --tag "$dist_tag" --auth-type web ${otp_args[@]+"${otp_args[@]}"}
+  # npm stages a new version for minutes before npm view sees it, so trust its exit code.
+  script -q /dev/null npm publish "$tgz" --access public --tag "$dist_tag" --auth-type web \
+    ${otp_args[@]+"${otp_args[@]}"} </dev/null >>"$log" 2>&1 && continue
+  tail -40 "$log" | grep -q 'previously published' && continue
+  tail -20 "$log" >&2
+  echo "publishing $name failed; run again" >&2
+  exit 1
 done
 
 echo "published @enekos/affected@$version ($dist_tag)"
