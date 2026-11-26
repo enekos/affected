@@ -1,0 +1,36 @@
+name: Bug report
+description: affected missed a change, reported a false hit, crashed, or errored
+labels: [bug]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What went wrong
+      options:
+        - A change that reaches an entry was not reported (false negative)
+        - An entry was reported although nothing reaches it (false positive)
+        - Error or crash
+        - Other
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: The smallest repository layout and diff that shows it. Paste file contents, or link a repo.
+      placeholder: |
+        tsconfig.json: { "include": ["src"] }
+        src/index.ts: import x from './a'
+        change: edited src/a.ts
+    validations: { required: true }
+  - type: textarea
+    id: command
+    attributes:
+      label: Command or call, and its output
+      render: shell
+    validations: { required: true }
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: '@enekos/affected 0.1.0, node 22.12, macOS arm64'
+    validations: { required: true }

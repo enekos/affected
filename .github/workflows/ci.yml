@@ -3,14 +3,24 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
+  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
 jobs:
   rust:
+    name: rust (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -21,14 +31,28 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
       - run: git config --global user.email ci@localhost && git config --global user.name CI
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-features
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets --locked
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
-        if: runner.os == 'Linux'
 
   build:
+    name: build (${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
@@ -51,6 +75,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
       - uses: mlugg/setup-zig@v2
         if: contains(matrix.target, 'musl')
       - run: pnpm install --frozen-lockfile
@@ -60,16 +87,20 @@ jobs:
           name: bindings-${{ matrix.target }}
           path: '*.node'
           if-no-files-found: error
+          retention-days: 7
 
   test:
+    name: test (${{ matrix.target }}, node ${{ matrix.node }})
     needs: build
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { host: macos-latest, target: aarch64-apple-darwin }
-          - { host: ubuntu-latest, target: x86_64-unknown-linux-gnu }
-          - { host: windows-latest, target: x86_64-pc-windows-msvc }
+          - { host: macos-latest, target: aarch64-apple-darwin, node: 24 }
+          - { host: ubuntu-latest, target: x86_64-unknown-linux-gnu, node: 20 }
+          - { host: ubuntu-latest, target: x86_64-unknown-linux-gnu, node: 22 }
+          - { host: ubuntu-latest, target: x86_64-unknown-linux-gnu, node: 24 }
+          - { host: windows-latest, target: x86_64-pc-windows-msvc, node: 24 }
     runs-on: ${{ matrix.host }}
     steps:
       - uses: actions/checkout@v4
@@ -79,33 +110,32 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm build:ts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
       - uses: actions/download-artifact@v4
         with:
           name: bindings-${{ matrix.target }}
       - run: git config --global user.email ci@localhost && git config --global user.name CI
       - run: pnpm typecheck
-      - run: pnpm test
+      - run: node --test test/*.test.ts
+        if: matrix.node != 20
+      # Node 20 cannot strip types: smoke-test the compiled package and CLI instead.
+      - run: node test/smoke.mjs
+        if: matrix.node == 20
 
-  publish:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [rust, test]
+  test-musl:
+    name: test (x86_64-unknown-linux-musl, alpine)
+    needs: build
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
+    container: node:24-alpine
     steps:
+      - run: apk add --no-cache git
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-          registry-url: https://registry.npmjs.org
-      - run: pnpm install --frozen-lockfile
+      - run: corepack enable && pnpm install --frozen-lockfile && pnpm build:ts
       - uses: actions/download-artifact@v4
         with:
-          path: artifacts
-      - run: pnpm napi artifacts --output-dir artifacts
-      - run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          name: bindings-x86_64-unknown-linux-musl
+      - run: git config --global --add safe.directory '*' && git config --global user.email ci@localhost && git config --global user.name CI
+      - run: node test/smoke.mjs

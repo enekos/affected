@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches package.json and Cargo.toml
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          npm_version=$(node -p "require('./package.json').version")
+          cargo_version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          echo "tag=$tag npm=$npm_version cargo=$cargo_version"
+          test "$tag" = "$npm_version" && test "$tag" = "$cargo_version"
+      - name: CHANGELOG has a section for the release
+        run: grep -q "^## \[${GITHUB_REF_NAME#v}\]" CHANGELOG.md
+
+  ci:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
+  npm:
+    needs: ci
+    runs-on: ubuntu-latest
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@enekos/affected/v/${{ steps.version.outputs.version }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bindings-*
+          path: artifacts
+      - run: pnpm napi artifacts --output-dir artifacts
+      - name: Publish (platform packages first, through prepublishOnly)
+        run: npm publish --access public --provenance --tag "$(case "$GITHUB_REF_NAME" in *-*) echo next;; *) echo latest;; esac)"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: 'true'
+
+  github:
+    needs: npm
+    runs-on: ubuntu-latest
+    environment:
+      name: github-releases
+      url: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bindings-*
+          path: bindings
+          merge-multiple: true
+      - name: Release notes from CHANGELOG
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '/^## \[/{p = index($0, "[" v "]") > 0; next} p' CHANGELOG.md > notes.md
+          printf '\n**npm:** https://www.npmjs.com/package/@enekos/affected/v/%s\n' "$version" >> notes.md
+      - run: gh release create "$GITHUB_REF_NAME" bindings/*.node --title "$GITHUB_REF_NAME" --notes-file notes.md $([[ "$GITHUB_REF_NAME" == *-* ]] && echo --prerelease)
+        env:
+          GH_TOKEN: ${{ github.token }}

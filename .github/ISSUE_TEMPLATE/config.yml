@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://enekos.github.io/affected/
+    about: Guides and reference
+  - name: Security vulnerability
+    url: https://github.com/enekos/affected/security/advisories/new
+    about: Report privately

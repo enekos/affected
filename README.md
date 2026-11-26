@@ -1,13 +1,32 @@
-# @enekos/affected
+<h1 align="center">affected</h1>
 
-Which TypeScript entry points does this diff reach?
+<p align="center"><b>Which TypeScript entry points does this diff reach?</b></p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@enekos/affected"><img alt="npm" src="https://img.shields.io/npm/v/@enekos/affected?color=cb3837&logo=npm"></a>
+  <a href="https://github.com/enekos/affected/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/enekos/affected/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://enekos.github.io/affected/"><img alt="docs" src="https://img.shields.io/badge/docs-enekos.github.io%2Faffected-blue"></a>
+  <a href="https://www.npmjs.com/package/@enekos/affected"><img alt="node" src="https://img.shields.io/node/v/@enekos/affected"></a>
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/github/license/enekos/affected"></a>
+</p>
+
+<p align="center">
+  <a href="https://enekos.github.io/affected/">Docs</a> ·
+  <a href="https://enekos.github.io/affected/guides/ci.html">CI guide</a> ·
+  <a href="https://enekos.github.io/affected/guides/test-selection.html">Test selection</a> ·
+  <a href="https://www.npmjs.com/package/@enekos/affected">npm</a> ·
+  <a href="CHANGELOG.md">Changelog</a> ·
+  <a href="ROADMAP.md">Roadmap</a>
+</p>
+
+---
 
 ```ts
 import { affected } from '@enekos/affected'
 
 const r = affected({
   entries: { jobs: 'packages/jobs-prompts/tsconfig.json', web: ['src/main.ts'] },
-  base: 'origin/main',
+  base: 'auto', // the CI pull request's target branch, or any ref
 })
 
 r.hit          // ['jobs']
@@ -16,104 +35,91 @@ r.why('jobs')  // ['…/prompts/index.ts', '…/buildImport.ts', '…/constants/
 r.has('jbos')  // ✗ type error: entry names are checked at compile time
 ```
 
-A Rust import graph (oxc parser + oxc resolver) built in parallel over **both sides of the diff**: the
-working tree, and the fork point read straight from git objects without a checkout. A changed file
-hits an entry when either graph reaches it, so imports a PR adds or removes count too.
+A Rust import graph ([oxc](https://oxc.rs) parser and resolver), built in parallel over **both sides of
+the diff**: the working tree, and the fork point read straight from git objects without a checkout. A
+changed file hits an entry when either graph reaches it, so imports a PR adds *or removes* count.
+
+- **Exact.** Lists the same files as `tsc --listFilesOnly` on every tsconfig of three production
+  monorepos, plus what tsc cannot see: globs, assets read through `__dirname`, `.vue`/`.svelte` scripts,
+  manifests.
+- **Precise about dependencies.** Bumping `zod` in `package.json` hits the files that import `zod` —
+  not everything.
+- **Fast.** 6–8× faster than `tsc --listFilesOnly`; 1,183 entries in ~220 ms.
 
 ## Install
 
 ```sh
-pnpm add -D @enekos/affected
+pnpm add -D @enekos/affected     # npm i -D @enekos/affected · yarn add -D @enekos/affected
 ```
 
-Prebuilt for macOS (arm64, x64), Linux (x64, arm64; glibc and musl) and Windows x64. Node ≥ 20.
-
-## API
-
-### `affected(options)` / `affectedAsync(options)`
-
-| Option | | |
-|---|---|---|
-| `entries` | `Record<name, string \| string[] \| { from, inputs }>` | A `tsconfig.json` (its `files` + `include` and every project it `references`, resolved with its `paths`, `extends` and `customConditions`), or source files resolved with their nearest tsconfig. `inputs` are globs whose changes hit the entry although no import reaches them. |
-| `base` | `string` | Compare against the merge base of this ref and `HEAD`. Changed files come from git. `'auto'` uses `AFFECTED_BASE`, else the CI pull request's target branch (GitHub, GitLab, Buildkite, Bitbucket, Azure), else `origin/HEAD`. |
-| `changed` | `string[]` | The changed files. Required without `base`; with `base`, overrides git's list. |
-| `cwd` | `string` | Paths in and out are relative to it. Default `process.cwd()`. |
-| `uncommitted` | `boolean` | With `base`, count uncommitted and untracked files. Default `true`. |
-| `types` | `boolean` | Follow `import type` edges. Default `true`. |
-| `globals` | `string[]` | Globs whose changes hit every entry, such as `pnpm-lock.yaml` or a shared build config. |
-
-`affectedAsync` runs on the libuv thread pool.
-
-### Result
-
-| | |
-|---|---|
-| `hit` | Names of the entries the diff reaches, in declaration order. |
-| `any` | Whether any entry is hit. |
-| `has(name)` | Whether `name` is hit. |
-| `why(name)` | The shortest import chain from an entry root to a changed file, or `undefined`. |
-| `entry(name)` | `{ name, hit, hits, chain, files }`; `files` is everything the entry reaches. |
-| `changed` | The changed files considered. |
-| `toString()` | One line per entry: `jobs  ← constants/limits.ts  via prompts/index.ts → buildImport.ts` |
+Prebuilt for macOS (arm64, x64), Linux (x64, arm64; glibc and musl) and Windows x64. Node ≥ 20. No
+postinstall scripts.
 
 ## CLI
 
 ```sh
-npx @enekos/affected -e jobs=packages/jobs-prompts/tsconfig.json -e web=src/main.ts -b origin/main
+npx affected -e jobs=packages/jobs-prompts/tsconfig.json -e web=src/main.ts -b origin/main
 # jobs  ← server/jobs/constants/limits.ts  via server/jobs/prompts/index.ts → server/jobs/prompts/build.ts
 # web  unaffected
-
-# CI: run a step only when the prompts can have changed
-if npx @enekos/affected -e jobs=packages/jobs-prompts/tsconfig.json -b origin/main --exit-code; then …; fi
-
-git diff --name-only HEAD~1 | npx @enekos/affected -e jobs=… -c -   # changed files from stdin
 ```
 
-`--json` prints the full report; `--names` prints the hit entry names one per line; `--github-output`
-appends `affected=["…"]` and `any=true|false` to `$GITHUB_OUTPUT`; `--committed` ignores uncommitted work;
-`--no-types` skips `import type`; `-g <glob>` adds a global input, `-i <name>=<glob>` an entry input.
-Exit codes with `--exit-code`: 0 hit, 1 not hit, 2 error.
+In GitHub Actions (`fetch-depth: 0`):
+
+```yaml
+- id: affected
+  run: npx -y @enekos/affected --base auto --github-output -e api=apps/api/tsconfig.json -e prompts=packages/prompts/tsconfig.json -g pnpm-lock.yaml
+- run: pnpm eval:prompts
+  if: contains(fromJSON(steps.affected.outputs.affected), 'prompts')
+```
+
+`--exit-code` (0 hit, 1 none, 2 error), `--names`, `--json`, `-c -` (changed files from stdin),
+`-g <glob>` (hits every entry), `-i <entry>=<glob>` (hits one). [Full CLI reference →](https://enekos.github.io/affected/reference/cli.html)
+
+## API
+
+| Option | | |
+|---|---|---|
+| `entries` | `Record<name, string \| string[] \| { from, inputs }>` | A `tsconfig.json` (its `files` + `include` and every project it `references`, resolved with its `paths`, `extends` and `customConditions`), or source files resolved with their nearest tsconfig. `inputs` are globs whose changes hit the entry although no import reaches them. |
+| `base` | `string` | Compare against the merge base of this ref and `HEAD`. `'auto'` uses `AFFECTED_BASE`, else the CI target branch (GitHub, GitLab, Buildkite, Bitbucket, Azure), else `origin/HEAD`. |
+| `changed` | `string[]` | The changed files. Required without `base`; with `base`, overrides git's list. |
+| `cwd` | `string` | Paths in and out are relative to it. Default `process.cwd()`. |
+| `uncommitted` | `boolean` | With `base`, count uncommitted and untracked files. Default `true`. |
+| `types` | `boolean` | Follow `import type` edges. Default `true`. |
+| `globals` | `string[]` | Globs whose changes hit every entry, such as `pnpm-lock.yaml`. |
+
+The result has `hit`, `any`, `has(name)`, `why(name)`, `entry(name)` (`{ hit, hits, chain, files }`),
+`changed` and `toString()`. `affectedAsync` runs on the libuv thread pool.
+[Full API reference →](https://enekos.github.io/affected/reference/api.html)
 
 ## What counts as an edge
 
-- **Modules:** static imports and re-exports, `import()` and `require()` with a literal,
-  `import x = require()`, `import('…')` types, `require.resolve()`, `/// <reference types>`, and the
-  module named by `jest.mock`/`vi.mock` and their `requireActual`/`importActual` relatives.
-- **Globs:** `import.meta.glob`, `require.context`, and template-literal or concatenated `import()`/`require()`
-  with a static directory (`` import(`./locales/${l}.json`) `` → `./locales/*.json`). A file the diff adds
-  that matches the glob hits.
-- **Files and assets:** `/// <reference path>`, `new URL('./x', import.meta.url)`, and
-  `join(__dirname, 'a', 'b')`/`path.resolve(import.meta.dirname, …)` with literal segments. A directory
-  stands for every file below it.
-- **Components:** the `<script>` blocks of `.vue` and `.svelte` files and Astro frontmatter.
-- **Manifests:** a workspace package reached through `node_modules` brings its `package.json`, so
-  retargeting `exports` hits. An installed package is a leaf that stands for its version range in the
-  nearest `package.json` declaring it: a bump hits exactly the files importing the bumped package, and
-  other `package.json` edits hit nothing. Lockfile-only changes need `globals`.
-- **Configs:** every config in an entry's `extends` chain, including package configs, and every
-  referenced project.
-
-Resolution follows tsconfig `paths`/`baseUrl`, package.json `imports`/`exports` with
-`customConditions`, and `.js` → `.ts` extension aliasing. Files in `node_modules` and outside the
-repository are leaves. The fork-point graph reads `node_modules` from the working tree's install.
+Static and dynamic imports, `require`, `import = require`, `import()` types, triple-slash references,
+`require.resolve`, `jest`/`vi` mocks; `import.meta.glob`, `require.context` and template-literal imports as
+globs (a file the PR adds under one hits); `new URL(…, import.meta.url)` and `join(__dirname, …)` assets;
+`.vue`/`.svelte`/`.astro` scripts; workspace packages through their `node_modules` symlinks; and each
+installed package as its version range in the declaring `package.json`.
+[How it works →](https://enekos.github.io/affected/how-it-works.html)
 
 ## Speed
 
-On a 5,166-file TypeScript service (Apple M-series, 12 threads), compared with
-`tsc --listFilesOnly` from TypeScript 7 on the same tsconfig. Same file list in both:
+On a 5,166-file TypeScript service (Apple M-series, 12 threads), with the same file list as
+`tsc --listFilesOnly`:
 
 | | Time |
 |---|---|
-| `tsc --listFilesOnly` (TS 7) | 700 ms |
+| `tsc --listFilesOnly` (TypeScript 7) | 700 ms |
 | `affected`, `changed` given (working tree only) | ~110 ms |
 | `affected`, `base` given (working tree + fork point) | ~170 ms |
 | `affected`, a 53-file entry, `base` given | ~58 ms |
 | `affected`, 1,183 entries (one per test file), `base` given | ~220 ms |
 
-Entries run in parallel and share resolvers and each file's resolved imports, so a large set of entries
-costs little more than their union. The fork point reuses the working tree's parse for every file the diff did not touch and reads the
-rest through one `git cat-file --batch` process per worker thread.
+Entries share resolvers and resolved imports, so many entries cost little more than their union. The fork
+point reuses the working tree's parse for every file the diff did not touch.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately ([SECURITY.md](SECURITY.md)).
 
 ## License
 
-MIT
+[MIT](LICENSE)

@@ -1,7 +1,13 @@
 [package]
 name = "affected-core"
-description = "Find which TypeScript entry points a set of changed files reaches"
+description = "Find which TypeScript entry points a git diff reaches, on both sides of the diff"
 version.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["typescript", "dependency-graph", "monorepo", "git", "ci"]
+categories = ["development-tools", "development-tools::testing"]
+# The crates.io name `affected-core` belongs to another project; publishing waits on a new name.
+publish = false
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

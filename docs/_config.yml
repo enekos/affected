@@ -1,0 +1,21 @@
+title: affected
+description: Which TypeScript entry points does this diff reach?
+remote_theme: just-the-docs/just-the-docs@v0.10.1
+plugins:
+  - jekyll-remote-theme
+url: https://enekos.github.io
+baseurl: /affected
+color_scheme: light
+search_enabled: true
+heading_anchors: true
+aux_links:
+  GitHub: https://github.com/enekos/affected
+  npm: https://www.npmjs.com/package/@enekos/affected
+aux_links_new_tab: true
+gh_edit_link: true
+gh_edit_link_text: Edit this page on GitHub
+gh_edit_repository: https://github.com/enekos/affected
+gh_edit_branch: main
+gh_edit_source: docs
+gh_edit_view_mode: edit
+footer_content: 'MIT licensed. <a href="https://github.com/enekos/affected/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/enekos/affected/blob/main/ROADMAP.md">Roadmap</a>'
