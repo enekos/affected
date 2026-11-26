@@ -51,8 +51,14 @@ impl Git {
 
     /// The commit both `base` and `HEAD` descend from: the point a branch forked.
     pub(crate) fn merge_base(&self, base: &str) -> Result<String, Error> {
-        let output = self.run(&["merge-base", base, "HEAD"])?;
-        Ok(String::from_utf8_lossy(&output).trim().to_owned())
+        match self.run(&["merge-base", base, "HEAD"]) {
+            Ok(output) => Ok(String::from_utf8_lossy(&output).trim().to_owned()),
+            Err(error) => {
+                let shallow =
+                    self.run(&["rev-parse", "--is-shallow-repository"]).is_ok_and(|out| out.starts_with(b"true"));
+                Err(if shallow { Error::ShallowClone(base.to_owned()) } else { error })
+            }
+        }
     }
 
     /// Paths changed between `commit` and the working tree, plus untracked files.

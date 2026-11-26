@@ -12,15 +12,45 @@ const MAX_EXTENDS_DEPTH: usize = 32;
 const TS_EXTENSIONS: [&str; 5] = [".ts", ".tsx", ".d.ts", ".mts", ".cts"];
 const JS_EXTENSIONS: [&str; 4] = [".js", ".jsx", ".mjs", ".cjs"];
 
+/// How many projects a chain of `references` may pull in.
+const MAX_PROJECTS: usize = 256;
+
 /// The part of a tsconfig that decides which files a program starts from.
 #[derive(Debug)]
 pub(crate) struct Tsconfig {
+    /// The config file itself.
+    pub(crate) path: PathBuf,
     /// The config file and every config it extends, nearest first.
     pub(crate) configs: Vec<PathBuf>,
     /// The program's root files: `files` plus everything `include` matches.
     pub(crate) roots: Vec<PathBuf>,
     /// `compilerOptions.customConditions`.
     pub(crate) conditions: Vec<String>,
+    /// The configs its `references` point at.
+    pub(crate) references: Vec<PathBuf>,
+}
+
+/// A tsconfig and, transitively, every project it references: what `tsc --build` builds.
+/// A missing referenced project is skipped.
+pub(crate) fn load_projects<S: Source>(source: &S, path: &Path) -> Result<Vec<Tsconfig>, Error> {
+    let mut projects = Vec::new();
+    let mut seen = vec![path.to_path_buf()];
+    let mut pending = vec![path.to_path_buf()];
+    while let Some(config) = pending.pop() {
+        let project = match load(source, &config) {
+            Ok(project) => project,
+            Err(Error::EntryNotFound(_)) if config != path => continue,
+            Err(error) => return Err(error),
+        };
+        for reference in &project.references {
+            if seen.len() < MAX_PROJECTS && !seen.contains(reference) {
+                seen.push(reference.clone());
+                pending.push(reference.clone());
+            }
+        }
+        projects.push(project);
+    }
+    Ok(projects)
 }
 
 #[derive(Default)]
@@ -36,6 +66,7 @@ struct Merged {
 pub(crate) fn load<S: Source>(source: &S, path: &Path) -> Result<Tsconfig, Error> {
     let mut merged = Merged::default();
     let mut configs = Vec::new();
+    let mut references = Vec::new();
     let mut pending = vec![path.to_path_buf()];
     while let Some(config) = pending.pop() {
         if configs.len() >= MAX_EXTENDS_DEPTH || configs.contains(&config) {
@@ -45,6 +76,9 @@ pub(crate) fn load<S: Source>(source: &S, path: &Path) -> Result<Tsconfig, Error
         let dir = config.parent().map(Path::to_path_buf).unwrap_or_default();
         merge(&mut merged, &value, &dir);
         configs.push(config);
+        if configs.len() == 1 {
+            references = references_of(source, &value, &dir);
+        }
         for parent in extends(&value).iter().rev() {
             if parent.starts_with('.') || Path::new(parent).is_absolute() {
                 let mut base = normalize(&dir.join(parent)).into_os_string();
@@ -52,6 +86,8 @@ pub(crate) fn load<S: Source>(source: &S, path: &Path) -> Result<Tsconfig, Error
                     base.push(".json");
                 }
                 pending.push(PathBuf::from(base));
+            } else if let Some(package) = package_config(source, &dir, parent) {
+                pending.push(package);
             }
         }
     }
@@ -81,7 +117,13 @@ pub(crate) fn load<S: Source>(source: &S, path: &Path) -> Result<Tsconfig, Error
     }
     roots.sort();
     roots.dedup();
-    Ok(Tsconfig { configs, roots, conditions: merged.conditions.unwrap_or_default() })
+    Ok(Tsconfig {
+        path: path.to_path_buf(),
+        configs,
+        roots,
+        conditions: merged.conditions.unwrap_or_default(),
+        references,
+    })
 }
 
 fn read<S: Source>(source: &S, path: &Path) -> Result<Value, Error> {
@@ -95,6 +137,40 @@ fn read<S: Source>(source: &S, path: &Path) -> Result<Value, Error> {
     })?;
     json_strip_comments::strip(&mut text).map_err(|error| invalid(error.to_string()))?;
     serde_json::from_str(&text).map_err(|error| invalid(error.to_string()))
+}
+
+/// `references[].path`: a config file, or a directory holding `tsconfig.json`.
+fn references_of<S: Source>(source: &S, value: &Value, dir: &Path) -> Vec<PathBuf> {
+    let Some(references) = value.get("references").and_then(Value::as_array) else { return Vec::new() };
+    references
+        .iter()
+        .filter_map(|reference| reference.get("path")?.as_str())
+        .map(|path| {
+            let target = normalize(&dir.join(path));
+            if source.metadata(&target).is_ok_and(|metadata| metadata.is_dir()) {
+                target.join("tsconfig.json")
+            } else {
+                target
+            }
+        })
+        .collect()
+}
+
+/// An `extends` naming a package, found the way TypeScript finds it: in the nearest
+/// `node_modules`, as the named file, that file plus `.json`, or a directory's
+/// `tsconfig.json`. Symlinked workspace packages come back as their path in the repository.
+fn package_config<S: Source>(source: &S, dir: &Path, specifier: &str) -> Option<PathBuf> {
+    let is_file = |path: &Path| source.metadata(path).is_ok_and(|metadata| metadata.is_file());
+    dir.ancestors().find_map(|ancestor| {
+        let target = ancestor.join("node_modules").join(specifier);
+        let mut with_json = target.clone().into_os_string();
+        with_json.push(".json");
+        let found =
+            [target.clone(), PathBuf::from(with_json), target.join("tsconfig.json")].into_iter().find(|candidate| {
+                candidate.extension().is_some_and(|extension| extension == "json") && is_file(candidate)
+            })?;
+        Some(source.canonicalize(&found).unwrap_or(found))
+    })
 }
 
 fn strings(value: Option<&Value>) -> Option<Vec<String>> {
@@ -147,7 +223,7 @@ fn glob(pattern: &str) -> Result<globset::Glob, globset::Error> {
     GlobBuilder::new(pattern).literal_separator(true).build()
 }
 
-fn glob_set(dir: &Path, patterns: &[String], directory_prefix: bool) -> Result<GlobSet, Error> {
+pub(crate) fn glob_set(dir: &Path, patterns: &[String], directory_prefix: bool) -> Result<GlobSet, Error> {
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
         let text = pattern_glob(dir, pattern);
@@ -183,7 +259,7 @@ fn expand<S: Source>(
 }
 
 /// The deepest directory every include pattern lives under, so only that subtree is listed.
-fn static_prefix(dir: &Path, patterns: &[String]) -> PathBuf {
+pub(crate) fn static_prefix(dir: &Path, patterns: &[String]) -> PathBuf {
     let prefixes: Vec<PathBuf> = patterns
         .iter()
         .map(|pattern| {

@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test, { type TestContext } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { affected, affectedAsync } from '../src/index.ts'
+import { affected, affectedAsync, detectBase } from '../src/index.ts'
 
 const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url))
 
@@ -98,4 +98,44 @@ test('the CLI prints one line per entry and signals hits through the exit code',
   const usage = run('-b', 'main')
   assert.equal(usage.status, 2)
   assert.match(usage.stderr, /pass at least one --entry/)
+})
+
+test('inputs and globals hit entries no import reaches', t => {
+  const { root, write } = repo(t, { ...app, 'jobs/templates/mail.hbs': 'hi', 'pnpm-lock.yaml': 'v1' })
+  write({ 'jobs/templates/mail.hbs': 'hello' })
+  const entries = { jobs: { from: 'jobs/tsconfig.json', inputs: ['jobs/templates/**'] }, web: 'web/main.ts' } as const
+  const result = affected({ cwd: root, entries, base: 'main' })
+  assert.deepEqual(result.hit, ['jobs'])
+  assert.deepEqual(result.why('jobs'), ['jobs/templates/mail.hbs'])
+
+  write({ 'pnpm-lock.yaml': 'v2' })
+  const all = affected({ cwd: root, entries, base: 'main', globals: ['pnpm-lock.yaml'] })
+  assert.deepEqual(all.hit, ['jobs', 'web'])
+})
+
+test("base 'auto' follows the CI's pull request target", () => {
+  assert.equal(detectBase({ AFFECTED_BASE: 'origin/release' }), 'origin/release')
+  assert.equal(detectBase({ GITHUB_BASE_REF: 'main' }), 'origin/main')
+  assert.equal(detectBase({ CI_MERGE_REQUEST_TARGET_BRANCH_NAME: 'develop' }), 'origin/develop')
+  assert.equal(detectBase({ SYSTEM_PULLREQUEST_TARGETBRANCH: 'refs/heads/main' }), 'origin/main')
+  assert.equal(detectBase({}), 'origin/HEAD')
+})
+
+test('the CLI lists hit names and writes GitHub outputs', t => {
+  const { root, write } = repo(t, app)
+  write({ 'web/view.ts': 'export const v = 1', 'pnpm-lock.yaml': 'v2' })
+  const output = join(root, 'github-output')
+  const run = (...args: string[]) =>
+    spawnSync(process.execPath, [cli, ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, GITHUB_OUTPUT: output } })
+
+  const names = run('-e', 'jobs=jobs/tsconfig.json', '-e', 'web=web/main.ts', '-b', 'main', '--names', '--github-output')
+  assert.equal(names.stdout, 'web\n')
+  assert.equal(readFileSync(output, 'utf8'), 'affected=["web"]\nany=true\n')
+
+  const global = run('-e', 'jobs=jobs/tsconfig.json', '-b', 'main', '-g', 'pnpm-lock.yaml', '--names')
+  assert.equal(global.stdout, 'jobs\n')
+
+  const input = run('-e', 'jobs=jobs/tsconfig.json', '-b', 'main', '-i', 'jobs=web/**', '--names')
+  assert.equal(input.stdout, 'jobs\n')
+  assert.match(run('-e', 'jobs=jobs/tsconfig.json', '-b', 'main', '-i', 'nope=x').stderr, /unknown entry "nope"/)
 })

@@ -16,6 +16,7 @@ export declare function analyzeAsync(options: NativeOptions): Promise<NativeRepo
 export interface NativeEntry {
   name: string
   paths: Array<string>
+  inputs?: Array<string>
 }
 
 export interface NativeEntryReport {
@@ -32,6 +33,7 @@ export interface NativeOptions {
   changed?: Array<string>
   uncommitted?: boolean
   types?: boolean
+  globals?: Array<string>
 }
 
 export interface NativeReport {

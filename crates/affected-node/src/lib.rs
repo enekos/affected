@@ -11,6 +11,7 @@ use napi_derive::napi;
 pub struct NativeEntry {
     pub name: String,
     pub paths: Vec<String>,
+    pub inputs: Option<Vec<String>>,
 }
 
 #[napi(object)]
@@ -22,6 +23,7 @@ pub struct NativeOptions {
     pub changed: Option<Vec<String>>,
     pub uncommitted: Option<bool>,
     pub types: Option<bool>,
+    pub globals: Option<Vec<String>>,
 }
 
 #[napi(object)]
@@ -44,8 +46,12 @@ impl From<NativeOptions> for Options {
     fn from(native: NativeOptions) -> Self {
         let mut options = Options::new(native.cwd)
             .uncommitted(native.uncommitted.unwrap_or(true))
-            .types(native.types.unwrap_or(true));
+            .types(native.types.unwrap_or(true))
+            .globals(native.globals.unwrap_or_default());
         for entry in native.entries {
+            if let Some(inputs) = entry.inputs {
+                options = options.inputs(entry.name.clone(), inputs);
+            }
             options =
                 options.entry(entry.name, Entry::from_paths(entry.paths.into_iter().map(PathBuf::from).collect()));
         }
