@@ -41,7 +41,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.120
+      - name: Install the workspace's minimum Rust version
+        run: |
+          msrv=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["rust-version"])')
+          rustup toolchain install "$msrv" --profile minimal
+          rustup override set "$msrv"
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-targets --locked
 
