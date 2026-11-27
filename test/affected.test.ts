@@ -11,7 +11,7 @@ const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url))
 
 function repo(t: TestContext, files: Record<string, string>) {
   const root = mkdtempSync(join(tmpdir(), 'affected-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }))
   const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' })
   const write = (changes: Record<string, string>) => {
     for (const [path, contents] of Object.entries(changes)) {

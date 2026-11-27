@@ -148,7 +148,7 @@ jobs:
         run: |
           bin="target/${{ matrix.target }}/release/affected"
           "$bin" --version
-          "$bin" -e core=crates/affected-core/src/lib.rs -c crates/affected-core/src/git.rs --exit-code
+          "$bin" -e cli=src/cli.ts -c src/index.ts --exit-code
       - name: Static on Linux
         if: matrix.zig
         run: file "target/${{ matrix.target }}/release/affected" | tee /dev/stderr | grep -q 'statically linked'

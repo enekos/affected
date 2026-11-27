@@ -41,5 +41,5 @@ try {
   assert.equal(paths.stdout, '--passWithNoTests\nsrc/a.ts\nsrc/index.ts\n', paths.stderr)
   console.log(`smoke ok: node ${process.version} ${process.platform}-${process.arch}`)
 } finally {
-  rmSync(root, { recursive: true, force: true })
+  rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 }

@@ -11,7 +11,7 @@ const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url))
 
 function repo(t: TestContext, files: Record<string, string>) {
   const root = mkdtempSync(join(tmpdir(), 'affected-cli-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }))
   const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' })
   const write = (changes: Record<string, string>) => {
     for (const [path, contents] of Object.entries(changes)) {
@@ -202,7 +202,7 @@ test('the GitHub Action deepens a shallow pull request checkout and runs the sel
   git(origin, 'commit', '-qm', 'main moves on')
 
   const clone = mkdtempSync(join(tmpdir(), 'affected-action-'))
-  t.after(() => rmSync(clone, { recursive: true, force: true }))
+  t.after(() => rmSync(clone, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }))
   execFileSync('git', ['clone', '-q', '--depth=1', '--branch', 'feature', `file://${origin}`, clone], { stdio: 'pipe' })
   const output = join(clone, '.github-output')
   const summary = join(clone, '.github-summary')
@@ -215,7 +215,7 @@ test('the GitHub Action deepens a shallow pull request checkout and runs the sel
   }
   const run = spawnSync('bash', [action], { cwd: clone, encoding: 'utf8', env })
   assert.equal(run.status, 0, run.stderr)
-  assert.equal(run.stdout, '["src/a.test.ts"]\n')
+  assert.equal(run.stdout, '["src/a.test.ts"]\n', run.stderr)
   assert.match(readFileSync(output, 'utf8'), /^affected=\["src\/a.test.ts"\]\nany=true\nfiles=\["src\/a.test.ts"\]\n/)
   assert.match(readFileSync(summary, 'utf8'), /1 of 3 selected/)
 })
