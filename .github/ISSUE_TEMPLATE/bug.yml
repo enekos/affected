@@ -32,5 +32,5 @@ body:
     id: versions
     attributes:
       label: Versions
-      placeholder: '@enekos/affected 0.1.0, node 22.12, macOS arm64'
+      placeholder: '@enekos/affected 0.2.0, node 24.12, macOS arm64'
     validations: { required: true }

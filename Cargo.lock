@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "affected-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dunce",
  "globset",
@@ -25,7 +25,7 @@ dependencies = [
 
 [[package]]
 name = "affected-node"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "affected-core",
  "napi",
@@ -35,7 +35,7 @@ dependencies = [
 
 [[package]]
 name = "affected-ts"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "affected-core",
  "lexopt",
