@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format follows
 
 - Added per-entry uncertainty diagnostics, opt-in strict selection, traced dependency edges with a Node File Trace adapter, and shadow comparison against full Vitest or Jest JSON results.
 - npm v2/v3 lockfile changes select transitive consumers. Missing or unsupported lockfile information selects all entries.
+- pnpm v6/v9 and Yarn Berry lockfile changes select transitive consumers, following pnpm peer-suffixed snapshots and Yarn peer dependencies. Yarn classic and Bun lockfiles, unknown versions, and settings, override or patch changes still select all entries.
 - Fixed runtime and declaration export conditions, dynamic import comments, file-entry tsconfig inputs, config parent precedence, tracked symlinks, committed snapshots, module-relative CLI paths and Vite glob exclusions.
 - CLI option errors exit 2. CI examples propagate analysis errors.
 

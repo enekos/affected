@@ -101,7 +101,7 @@ falls back to `origin/HEAD`. On pushes to `main` set `AFFECTED_BASE` to the prev
 Declare runtime inputs such as generated code or template directories with per-entry globs.
 
 ```sh
-npx affected -e api=apps/api/tsconfig.json -i 'api=apps/api/templates/**' -g pnpm-lock.yaml -b auto
+npx affected -e api=apps/api/tsconfig.json -i 'api=apps/api/templates/**' -g .nvmrc -b auto
 ```
 
 `-g` hits every entry; `-i name=glob` hits one.

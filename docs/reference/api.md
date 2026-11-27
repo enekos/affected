@@ -37,7 +37,7 @@ throw on invalid input (see [errors](#errors)).
 
 `strict: true` selects entries with incomplete analysis when the diff contains changes. With the default `strict: false`, inspect `entry.status` and `entry.diagnostics` before skipping an entry. Diagnostics identify the file, expression and graph revision. A definite hit remains selected even when other imports in that entry are unresolved.
 
-npm package-lock and shrinkwrap v2/v3 changes follow resolved packages and transitive consumers on both revisions. A missing snapshot, unsupported npm format or unresolved required lockfile dependency selects every entry. Changes to pnpm, Yarn and Bun lockfiles also select every entry. A global glob for an npm lockfile explicitly selects every entry.
+Lockfile changes follow resolved packages and transitive consumers on both revisions: npm package-lock and shrinkwrap v2/v3, pnpm v6 and v9 (peer-suffixed snapshots included), and Yarn Berry (v2+; a peer dependency counts as every locked package of that name). A missing snapshot, unsupported format or version, unresolved required lockfile dependency, or a change to lockfile settings, overrides or patches selects every entry. Yarn classic (v1) and Bun lockfiles always select every entry. A global glob for a lockfile explicitly selects every entry.
 
 Pass observed dependencies as `trace: [{ from, to, revision }]`. Paths are relative to `cwd`. Use `head` or `base` to bind an observation to its snapshot. Omitting the revision applies the edge to both. `why(name)` returns the existing path array. `why(name, { details: true })` adds `reason`, `revision` and `traceSteps` (the target of each traced edge along the chain). A strict fallback has reason `unknown` and an empty chain.
 

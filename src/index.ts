@@ -49,7 +49,7 @@ export interface AffectedOptions<Name extends string = string> {
   /** Select uncertain entries on a nonempty diff. */
   strict?: boolean
   trace?: readonly TraceEdge[]
-  /** Globs (relative to `cwd`) whose changes hit every entry, such as a lockfile or a shared config. */
+  /** Globs (relative to `cwd`) whose changes hit every entry, such as a shared config. */
   globals?: readonly string[]
 }
 
