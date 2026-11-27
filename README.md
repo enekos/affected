@@ -46,6 +46,29 @@ changed file hits an entry when either graph reaches it, so imports a PR adds *o
   not everything.
 - **Fast.** 6–8× faster than `tsc --listFilesOnly`; 1,183 entries in ~220 ms.
 
+## Run only the tests a pull request reaches
+
+```yaml
+- uses: actions/checkout@v7
+# … your usual Node setup and install, then:
+- uses: enekos/affected@v0
+  with:
+    run: pnpm vitest run {files}
+```
+
+The Action asks Vitest or Jest for the test files and their setup files, fetches the target branch on
+shallow checkouts, runs the command on the hit files, skips it when none is hit, and runs everything when
+the analysis is incomplete. It also writes a job summary with the import chain behind each hit.
+Outside GitHub Actions use the CLI:
+
+```sh
+npx @enekos/affected tests -- vitest run {files}     # or: jest {files}
+npx @enekos/affected tests --format vitest           # runner arguments for the hit tests, or none
+```
+
+[CI guide →](https://enekos.github.io/affected/guides/ci.html) ·
+[Test selection →](https://enekos.github.io/affected/guides/test-selection.html)
+
 ## Install
 
 ```sh
@@ -54,6 +77,10 @@ pnpm add -D @enekos/affected     # npm i -D @enekos/affected · yarn add -D @ene
 
 Prebuilt for macOS (arm64, x64), Linux (x64, arm64; glibc and musl) and Windows x64. Node ≥ 20. No
 postinstall scripts.
+
+No Node (Bun, Deno, other CI images)? Use the standalone `affected` binary from the
+[GitHub releases](https://github.com/enekos/affected/releases) or `cargo binstall`; see
+[Install without Node](https://enekos.github.io/affected/reference/cli.html#install-without-node).
 
 ## CLI
 
@@ -67,13 +94,15 @@ In GitHub Actions (`fetch-depth: 0`):
 
 ```yaml
 - id: affected
-  run: npx -y @enekos/affected --strict --base auto --github-output -e api=apps/api/tsconfig.json -e prompts=packages/prompts/tsconfig.json -g pnpm-lock.yaml
+  run: npx -y @enekos/affected --strict --base auto --github-output -e api=apps/api/tsconfig.json -e prompts=packages/prompts/tsconfig.json
 - run: pnpm eval:prompts
   if: contains(fromJSON(steps.affected.outputs.affected), 'prompts')
 ```
 
-`--exit-code` (0 hit, 1 none, 2 error), `--names`, `--json`, `-c -` (changed files from stdin),
-`-g <glob>` (hits every entry), `-i <entry>=<glob>` (hits one). [Full CLI reference →](https://enekos.github.io/affected/reference/cli.html)
+`-e 'src/**/*.test.ts'` makes one entry per matching file. `affected.config.{ts,json}` holds entries,
+globals and defaults for CI and local runs. `--format names|paths|json|vitest|jest|playwright`,
+`--exit-code` (0 hit, 1 none, 2 error), `-c -` (changed files from stdin), `-g <glob>` (hits every
+entry), `-i <entry>=<glob>` (hits one), `--github-output`, `--github-summary`, and `-- <command> {files}`. [Full CLI reference →](https://enekos.github.io/affected/reference/cli.html)
 
 ## API
 
@@ -85,7 +114,7 @@ In GitHub Actions (`fetch-depth: 0`):
 | `cwd` | `string` | Paths in and out are relative to it. Default `process.cwd()`. |
 | `uncommitted` | `boolean` | With `base`, count uncommitted and untracked files. Default `true`. |
 | `types` | `boolean` | Follow `import type` edges. Default `true`. |
-| `globals` | `string[]` | Globs whose changes hit every entry, such as `pnpm-lock.yaml`. |
+| `globals` | `string[]` | Globs whose changes hit every entry, such as `.nvmrc`. |
 
 The result has `hit`, `any`, `has(name)`, `why(name)`, `entry(name)` (`{ hit, hits, chain, files }`),
 `changed` and `toString()`. `affectedAsync` runs on the libuv thread pool.
@@ -93,7 +122,7 @@ The result has `hit`, `any`, `has(name)`, `why(name)`, `entry(name)` (`{ hit, hi
 
 ## Checking a CI selection
 
-Use `--strict` to include entries with unresolved imports. Each diagnostic names the file and revision. npm v2/v3 lockfiles select entries that import a changed dependency, including transitive updates. Changes to unsupported lockfiles select every entry.
+Use `--strict` to include entries with unresolved imports. Each diagnostic names the file and revision. npm (v2/v3), pnpm (v6/v9) and Yarn Berry lockfiles select entries that import a changed dependency, including transitive and peer updates. Yarn classic and Bun lockfiles, unknown lockfile versions, and changes to lockfile settings, overrides or patches select every entry.
 
 Use `--shadow-out selection.json` alongside a full test run, then `--compare-shadow selection.json --results vitest.json` to see which failing files the selector would have skipped. You can also supply observed parent–child edges from `@vercel/nft`. [Test selection guide](docs/guides/test-selection.md) · [Trace API](docs/reference/api.md)
 

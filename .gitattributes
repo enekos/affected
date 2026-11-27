@@ -1,0 +1,2 @@
+# Lockfile fixtures are compared byte for byte; a CRLF checkout on Windows would change them.
+crates/affected-core/tests/fixtures/** text eol=lf

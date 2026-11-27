@@ -13,6 +13,9 @@ export declare function analyze(options: NativeOptions): NativeReport
 
 export declare function analyzeAsync(options: NativeOptions): Promise<NativeReport>
 
+/** Files matching any `include` glob and no `exclude` glob, relative to `cwd`, sorted. */
+export declare function expand(cwd: string, include: Array<string>, exclude: Array<string>): Array<string>
+
 export interface NativeDiagnostic {
   file: string
   expression: string

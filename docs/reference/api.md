@@ -37,7 +37,7 @@ throw on invalid input (see [errors](#errors)).
 
 `strict: true` selects entries with incomplete analysis when the diff contains changes. With the default `strict: false`, inspect `entry.status` and `entry.diagnostics` before skipping an entry. Diagnostics identify the file, expression and graph revision. A definite hit remains selected even when other imports in that entry are unresolved.
 
-npm package-lock and shrinkwrap v2/v3 changes follow resolved packages and transitive consumers on both revisions. A missing snapshot, unsupported npm format or unresolved required lockfile dependency selects every entry. Changes to pnpm, Yarn and Bun lockfiles also select every entry. A global glob for an npm lockfile explicitly selects every entry.
+Lockfile changes follow resolved packages and transitive consumers on both revisions: npm package-lock and shrinkwrap v2/v3, pnpm v6 and v9 (peer-suffixed snapshots included), and Yarn Berry (v2+; a peer dependency counts as every locked package of that name). A missing snapshot, unsupported format or version, unresolved required lockfile dependency, or a change to lockfile settings, overrides or patches selects every entry. Yarn classic (v1) and Bun lockfiles always select every entry. A global glob for a lockfile explicitly selects every entry.
 
 Pass observed dependencies as `trace: [{ from, to, revision }]`. Paths are relative to `cwd`. Use `head` or `base` to bind an observation to its snapshot. Omitting the revision applies the edge to both. `why(name)` returns the existing path array. `why(name, { details: true })` adds `reason`, `revision` and `traceSteps` (the target of each traced edge along the chain). A strict fallback has reason `unknown` and an empty chain.
 
@@ -87,6 +87,39 @@ installed package. See [how it works](../how-it-works.html#packages-and-manifest
 ## `detectBase(env?)`
 
 Returns the ref `base: 'auto'` resolves to for the given environment (default `process.env`).
+
+## Glob entries
+
+`globEntries(patterns, cwd?)` returns one entry per matching file, named by its path:
+`affected({ entries: globEntries('src/**/*.test.ts'), base: 'auto' })`. `expandGlobs(patterns, cwd?)`
+returns just the paths. Patterns starting with `!` exclude. In a git work tree only files git does not
+ignore match, untracked ones included.
+
+## Test discovery
+
+`discoverTests({ cwd?, runner?, config? })` asks Vitest (3 or later, through `vitest/node`) or Jest
+(`--listTests`, `--showConfig`), resolved from `cwd`, for the test files and setup files it would load.
+It resolves to `{ runner, files: [{ path, setup }], globals }`. `testEntries(suite)` turns that into
+entries: each test file first, its setup files after. Add `suite.globals` (the runner configs) to
+`globals`.
+
+```ts
+const suite = await discoverTests()
+const entries = testEntries(suite)
+const result = affected({ entries, globals: [...suite.globals], base: 'auto', strict: true })
+const files = selectedPaths(result, entries)
+```
+
+## Config and output helpers
+
+| | |
+|---|---|
+| `defineConfig(config)` | Types an `affected.config.ts`; entry names stay literal. |
+| `loadConfig(cwd?, file?)` | Loads `file` or the `affected.config.*` in `cwd`: `{ path, config }` or `undefined`. |
+| `selectedPaths(result, entries)` | The first root of each hit entry. |
+| `runnerArgs('vitest' \| 'jest' \| 'playwright', paths)` | Arguments that run exactly `paths`, or nothing when it is empty. |
+| `render(result, entries, format)` | The CLI's `--format` output. |
+| `githubOutput(result, entries)` / `githubSummary(result, base?)` | The CLI's `$GITHUB_OUTPUT` lines and job summary. |
 
 ## Errors
 

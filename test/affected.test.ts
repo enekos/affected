@@ -11,7 +11,7 @@ const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url))
 
 function repo(t: TestContext, files: Record<string, string>) {
   const root = mkdtempSync(join(tmpdir(), 'affected-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }))
   const git = (...args: string[]) => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' })
   const write = (changes: Record<string, string>) => {
     for (const [path, contents] of Object.entries(changes)) {
@@ -130,7 +130,8 @@ test('the CLI lists hit names and writes GitHub outputs', t => {
 
   const names = run('-e', 'jobs=jobs/tsconfig.json', '-e', 'web=web/main.ts', '-b', 'main', '--names', '--github-output')
   assert.equal(names.stdout, 'web\n')
-  assert.equal(readFileSync(output, 'utf8'), 'affected=["web"]\nany=true\n')
+  assert.equal(readFileSync(output, 'utf8'),
+    'affected=["web"]\nany=true\nfiles=["web/main.ts"]\nmatrix={"entry":["web"]}\ncount=1\ntotal=2\n')
 
   const global = run('-e', 'jobs=jobs/tsconfig.json', '-b', 'main', '-g', 'global.yml', '--names')
   assert.equal(global.stdout, 'jobs\n')

@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { affected, affectedAsync } from '../dist/index.js'
+import { affected, affectedAsync, globEntries } from '../dist/index.js'
 
 const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url))
 const root = mkdtempSync(join(tmpdir(), 'affected-smoke-'))
@@ -36,7 +36,10 @@ try {
   })
   assert.equal(run.status, 0, run.stderr)
   assert.equal(run.stdout, 'app\n')
+  assert.deepEqual(Object.keys(globEntries('src/*.ts', root)), ['src/a.ts', 'src/index.ts'])
+  const paths = spawnSync(process.execPath, [cli, '-e', 'src/*.ts', '-b', 'main', '-f', 'vitest'], { cwd: root, encoding: 'utf8' })
+  assert.equal(paths.stdout, '--passWithNoTests\nsrc/a.ts\nsrc/index.ts\n', paths.stderr)
   console.log(`smoke ok: node ${process.version} ${process.platform}-${process.arch}`)
 } finally {
-  rmSync(root, { recursive: true, force: true })
+  rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 }
