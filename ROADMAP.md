@@ -31,22 +31,22 @@ and assets. `affected` sees both revisions. The blocker is fear of a missed fail
 
 Goal: a repo with Vitest or Jest goes from zero to selective tests in one copy-pasted step.
 
-- [ ] **`affected tests`.** Read the Vitest/Jest config (`include`, `exclude`, `projects`, `setupFiles`,
+- [x] **`affected tests`.** Read the Vitest/Jest config (`include`, `exclude`, `projects`, `setupFiles`,
       `globalSetup`), make one entry per test file, and treat setup files as globals. No entry list.
-- [ ] **Runner output.** `--format vitest|jest|playwright|paths|json`. `affected tests --format vitest`
+- [x] **Runner output.** `--format vitest|jest|playwright|paths|json`. `affected tests --format vitest`
       prints args for `vitest run`; an empty selection prints a flag that runs nothing and exits 0.
-- [ ] **`affected exec -- <cmd> {files}`.** Substitute the selection into a command, and run it unfiltered
+- [x] **`affected [tests] -- <cmd> {files}`.** Substitute the selection into a command, and run it unfiltered
       when the selection is uncertain or the base is missing. Still not a task runner: one command, no
       cache.
-- [ ] **GitHub Action `enekos/affected-action`.** Marketplace listing, handles `fetch-depth`, sets
+- [x] **GitHub Action `enekos/affected@v0`.** In this repository, ready for a Marketplace listing; handles `fetch-depth`, sets
       `affected`, `files` and `matrix` outputs, writes the job summary. Most CI tools are found on the
       Marketplace, not on npm.
-- [ ] **Glob entries.** `-e 'src/**/*.test.ts'` makes one entry per match, named by path.
-- [ ] **Config file.** `affected.config.{ts,json}` for entries, globals and inputs, shared by CI, local
+- [x] **Glob entries.** `-e 'src/**/*.test.ts'` makes one entry per match, named by path.
+- [x] **Config file.** `affected.config.{ts,json}` for entries, globals and inputs, shared by CI, local
       runs, the Action and the MCP server. `defineConfig` keeps entry names typed.
 - [ ] **pnpm and Yarn lockfiles.** Precise comparisons. Most monorepos use pnpm, and today a
       `pnpm-lock.yaml` change selects everything.
-- [ ] **Standalone binary.** `cargo binstall affected`, a Homebrew tap and a static Linux binary, so Bun,
+- [x] **Standalone binary.** Release assets for static Linux, macOS and Windows, `cargo binstall --git` metadata and a Homebrew formula template (the tap and a crates.io name are open), so Bun,
       Deno and non-Node CI images work. Settle the crate name first (`affected-core` is taken).
 
 Ship check: on date-fns, Nano ID and one JOIN repo, the README's two-line CI snippet works unedited.

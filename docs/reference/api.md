@@ -88,6 +88,39 @@ installed package. See [how it works](../how-it-works.html#packages-and-manifest
 
 Returns the ref `base: 'auto'` resolves to for the given environment (default `process.env`).
 
+## Glob entries
+
+`globEntries(patterns, cwd?)` returns one entry per matching file, named by its path:
+`affected({ entries: globEntries('src/**/*.test.ts'), base: 'auto' })`. `expandGlobs(patterns, cwd?)`
+returns just the paths. Patterns starting with `!` exclude. In a git work tree only files git does not
+ignore match, untracked ones included.
+
+## Test discovery
+
+`discoverTests({ cwd?, runner?, config? })` asks Vitest (3 or later, through `vitest/node`) or Jest
+(`--listTests`, `--showConfig`), resolved from `cwd`, for the test files and setup files it would load.
+It resolves to `{ runner, files: [{ path, setup }], globals }`. `testEntries(suite)` turns that into
+entries: each test file first, its setup files after. Add `suite.globals` (the runner configs) to
+`globals`.
+
+```ts
+const suite = await discoverTests()
+const entries = testEntries(suite)
+const result = affected({ entries, globals: [...suite.globals], base: 'auto', strict: true })
+const files = selectedPaths(result, entries)
+```
+
+## Config and output helpers
+
+| | |
+|---|---|
+| `defineConfig(config)` | Types an `affected.config.ts`; entry names stay literal. |
+| `loadConfig(cwd?, file?)` | Loads `file` or the `affected.config.*` in `cwd`: `{ path, config }` or `undefined`. |
+| `selectedPaths(result, entries)` | The first root of each hit entry. |
+| `runnerArgs('vitest' \| 'jest' \| 'playwright', paths)` | Arguments that run exactly `paths`, or nothing when it is empty. |
+| `render(result, entries, format)` | The CLI's `--format` output. |
+| `githubOutput(result, entries)` / `githubSummary(result, base?)` | The CLI's `$GITHUB_OUTPUT` lines and job summary. |
+
 ## Errors
 
 | Message | Cause |

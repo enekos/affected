@@ -46,6 +46,29 @@ changed file hits an entry when either graph reaches it, so imports a PR adds *o
   not everything.
 - **Fast.** 6–8× faster than `tsc --listFilesOnly`; 1,183 entries in ~220 ms.
 
+## Run only the tests a pull request reaches
+
+```yaml
+- uses: actions/checkout@v7
+# … your usual Node setup and install, then:
+- uses: enekos/affected@v0
+  with:
+    run: pnpm vitest run {files}
+```
+
+The Action asks Vitest or Jest for the test files and their setup files, fetches the target branch on
+shallow checkouts, runs the command on the hit files, skips it when none is hit, and runs everything when
+the analysis is incomplete. It also writes a job summary with the import chain behind each hit.
+Outside GitHub Actions use the CLI:
+
+```sh
+npx @enekos/affected tests -- vitest run {files}     # or: jest {files}
+npx @enekos/affected tests --format vitest           # runner arguments for the hit tests, or none
+```
+
+[CI guide →](https://enekos.github.io/affected/guides/ci.html) ·
+[Test selection →](https://enekos.github.io/affected/guides/test-selection.html)
+
 ## Install
 
 ```sh
@@ -76,8 +99,10 @@ In GitHub Actions (`fetch-depth: 0`):
   if: contains(fromJSON(steps.affected.outputs.affected), 'prompts')
 ```
 
-`--exit-code` (0 hit, 1 none, 2 error), `--names`, `--json`, `-c -` (changed files from stdin),
-`-g <glob>` (hits every entry), `-i <entry>=<glob>` (hits one). [Full CLI reference →](https://enekos.github.io/affected/reference/cli.html)
+`-e 'src/**/*.test.ts'` makes one entry per matching file. `affected.config.{ts,json}` holds entries,
+globals and defaults for CI and local runs. `--format names|paths|json|vitest|jest|playwright`,
+`--exit-code` (0 hit, 1 none, 2 error), `-c -` (changed files from stdin), `-g <glob>` (hits every
+entry), `-i <entry>=<glob>` (hits one), `--github-output`, `--github-summary`, and `-- <command> {files}`. [Full CLI reference →](https://enekos.github.io/affected/reference/cli.html)
 
 ## API
 

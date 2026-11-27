@@ -10,6 +10,51 @@ nav_order: 1
 1. TOC
 {:toc}
 
+## The GitHub Action
+
+```yaml
+on: pull_request
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - uses: enekos/affected@v0
+        with:
+          run: pnpm vitest run {files}
+```
+
+| Input | Default | |
+|---|---|---|
+| `run` | | Command to run with the selection, split on whitespace. `{files}` expands to the hit test files and `{names}` to the hit entries; without either the files go last. Skipped when nothing is hit; run on everything when the analysis fails. Empty: only set outputs. |
+| `entries` | `tests` | `tests` asks Vitest or Jest for the test files. `config` uses `affected.config.*` or `-e` flags in `args`. |
+| `args` | | Extra CLI flags, such as `--runner jest`, `-g '.github/**'` or `-e api=apps/api/tsconfig.json`. |
+| `base` | `auto` | The pull request's target branch; on a push, the commit before it. |
+| `working-directory` | `.` | Where to run. |
+| `summary` | `true` | Write a job summary with the chain behind each hit. |
+| `fetch` | `true` | On a shallow checkout, fetch the base branch and deepen until the fork point. |
+| `version` | the Action's | `@enekos/affected` version to run. |
+
+Outputs: `affected` (JSON array of hit entries), `any`, `files` (JSON array of hit test files),
+`matrix` (`{"entry": [...]}`), `count` and `total`. The Action needs Node on the runner and the
+project's dependencies installed, because it asks the project's own test runner for its test files.
+
+To only decide whether a job runs, leave `run` empty and use the outputs:
+
+```yaml
+      - id: affected
+        uses: enekos/affected@v0
+        with:
+          entries: config
+          args: -e api=apps/api/tsconfig.json -e prompts=packages/prompts/tsconfig.json
+      - run: pnpm eval:prompts
+        if: contains(fromJSON(steps.affected.outputs.affected), 'prompts')
+```
+
 ## Fetch enough history
 
 `affected` needs the merge base of your branch and its target. A default shallow checkout has none, and
@@ -19,8 +64,8 @@ nav_order: 1
 affected: no merge base with origin/main: this is a shallow clone. Fetch history first …
 ```
 
-On GitHub Actions use `fetch-depth: 0` (add `filter: blob:none` on large repositories; base blobs are read
-on demand).
+The Action fetches what it needs. Without it, use `fetch-depth: 0` on GitHub Actions (add
+`filter: blob:none` on large repositories; base blobs are read on demand).
 
 ## GitHub Actions: skip a job
 
@@ -52,7 +97,8 @@ jobs:
 ```
 
 `--base auto` uses the pull request's target branch (`GITHUB_BASE_REF`), so the same step works on every
-PR. `--github-output` writes `affected` (a JSON array of hit entry names) and `any` (`true`/`false`).
+PR. `--github-output` writes `affected` (a JSON array of hit entry names), `any` (`true`/`false`),
+`files`, `matrix`, `count` and `total`; `--github-summary` adds a Markdown table to the job summary.
 
 ## GitHub Actions: a matrix of hit entries
 

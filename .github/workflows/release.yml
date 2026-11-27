@@ -62,3 +62,9 @@ jobs:
       - run: gh release create "$GITHUB_REF_NAME" bindings/*.node binaries/* --title "$GITHUB_REF_NAME" --notes-file notes.md $([[ "$GITHUB_REF_NAME" == *-* ]] && echo --prerelease)
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: Move the major tag the GitHub Action is used by (enekos/affected@v0)
+        if: ${{ !contains(github.ref_name, '-') }}
+        run: |
+          major="${GITHUB_REF_NAME%%.*}"
+          git tag -f "$major" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$major"

@@ -7,26 +7,38 @@ nav_order: 2
 # CLI
 
 ```
-affected --entry <name>=<tsconfig.json | file,file…> [options]
+affected [options]                         which entries does the diff reach?
+affected tests [options]                   which test files? Vitest or Jest lists them
+affected [tests] [options] -- <command…>   run <command> with the selection
 ```
+
+After `--`, `{files}` expands to the first root of each hit entry (the test file with `tests`) and
+`{names}` to the hit names; without either, the files go last. An empty selection skips the command and
+exits 0. When every entry is hit, `tests` runs the command without file arguments. When the analysis
+fails, the command runs on everything. Its exit code becomes affected's.
 
 | Flag | |
 |---|---|
-| `-e, --entry <name>=<paths>` | An entry; repeat for several. Comma-separate several files. |
-| `-b, --base <ref>` | Compare against the fork point of `<ref>`; `auto` picks the CI target branch. |
+| `-e, --entry <name>=<paths>` | An entry; repeat for several. Comma-separate several files; globs expand. |
+| `-e, --entry <glob>` | One entry per matching file, named by its path. Matches files git does not ignore. |
+| `--runner vitest\|jest` | With `tests`: the runner to ask. Defaults to the one `package.json` depends on. |
+| `--runner-config <file>` | With `tests`: the runner's config file. |
+| `-b, --base <ref>` | Compare against the fork point of `<ref>`. Defaults to `auto`, the CI target branch, unless `--changed` is given. |
 | `-c, --changed <file>` | A changed file; repeat, or `-` to read lines from stdin. |
 | `--committed` | With `--base`, ignore uncommitted and untracked files. |
 | `--no-types` | Do not follow `import type`. |
 | `-g, --global <glob>` | A changed file matching `<glob>` hits every entry. |
 | `-i, --input <name>=<glob>` | A changed file matching `<glob>` hits entry `<name>`. |
-| `--strict` | Select entries with unresolved dependencies on a nonempty diff. |
-| `--config <file>` | Read entries, globals and defaults from JSON. Defaults to `affected.config.json` in the working directory. |
+| `--strict` / `--no-strict` | Select entries with unresolved dependencies on a nonempty diff. On by default with `tests` and with a command. |
+| `--config <file>` | Read entries, globals and defaults. Defaults to `affected.config.{ts,mts,js,mjs,json}` in the working directory (JSON only in the standalone binary). |
+| `--no-config` | Ignore the config file. |
 | `--trace <file>` | Load a JSON array of dependency edges with `from`, `to` and optional `revision` (`head` or `base`). Paths are relative to the working directory. |
 | `--shadow-out <file>` | Save the proposed test selection. Use the test file as the first root of each entry. |
 | `--compare-shadow <plan> --results <runner.json>` | Compare against a full Vitest or Jest JSON report. Exit 1 for missed failures or missing candidate results, 2 for invalid input, and 0 for agreement. |
-| `--json` | Print the full report as JSON. |
-| `--names` | Print hit entry names, one per line. |
-| `--github-output` | Append `affected=<JSON array>` and `any=<bool>` to `$GITHUB_OUTPUT`. |
+| `-f, --format <format>` | `text`, `json`, `names`, `paths` (first root of each hit entry), or `vitest`, `jest`, `playwright`: runner arguments, one per line, that run exactly the hit files or nothing. |
+| `--json`, `--names` | Short for `--format json` and `--format names`. |
+| `--github-output` | Append `affected` (JSON array of hit names), `any`, `files`, `matrix` (`{"entry": [...]}`), `count` and `total` to `$GITHUB_OUTPUT`. |
+| `--github-summary` | Append a Markdown table of hits and their chains to `$GITHUB_STEP_SUMMARY`. |
 | `--exit-code` | Exit `0` when an entry is hit, `1` when none is. |
 | `-h, --help` | Help. |
 | `-V, --version` | Version (standalone binary only). |
@@ -35,7 +47,15 @@ Errors always exit `2`.
 
 ## Config file
 
-`affected.config.json` holds what CI and local runs share:
+`affected.config.json` (or `.ts`, `.mts`, `.js`, `.mjs` for the Node CLI) holds what CI and local
+runs share. In TypeScript, `defineConfig` keeps entry names typed:
+
+```ts
+import { defineConfig } from '@enekos/affected'
+export default defineConfig({ entries: { api: 'apps/api/tsconfig.json' }, globals: ['pnpm-lock.yaml'] })
+```
+
+A `tests` key (`{ "runner": "jest", "config": "jest.ci.config.js" }`) configures `affected tests`.
 
 ```json
 {
