@@ -37,8 +37,8 @@ Diff:
   --trace <file>              Read traced edges [{from,to,revision?}] from JSON
 
 Output:
-  --format, -f <format>       ${FORMATS.join(' | ')}. vitest, jest and playwright print
-                              runner arguments that run the hit test files, or nothing
+  --format, -f <format>       ${FORMATS.join(', ')}.
+                              The runner formats print arguments that run exactly the hit test files
   --json, --names             Short for --format json, --format names
   --github-output             Append affected, any, files, matrix, count and total to $GITHUB_OUTPUT
   --github-summary            Append a Markdown table of hits to $GITHUB_STEP_SUMMARY

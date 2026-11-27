@@ -1,6 +1,6 @@
 //! Report output, byte-compatible with the Node CLI (`Affected.toString()` and `JSON.stringify`).
 
-use affected_core::{EntryReport, Report};
+use affected_core::{Entry, EntryReport, Options, Report};
 use serde::Serialize;
 
 /// `affected`, `unknown` or `unaffected`, as the Node package reports it.
@@ -48,12 +48,37 @@ pub fn hit_names(report: &Report) -> impl Iterator<Item = &str> {
     report.entries.iter().filter(|entry| entry.is_hit()).map(|entry| entry.name.as_str())
 }
 
-/// The `$GITHUB_OUTPUT` lines: `affected=<JSON array of hit names>` and `any=<bool>`.
+/// The `$GITHUB_OUTPUT` lines, as the Node CLI writes them: `affected` (JSON array of hit names),
+/// `any`, `files` (the first root of each hit entry), `matrix`, `count` and `total`.
 #[must_use]
-pub fn github_output(report: &Report) -> String {
+pub fn github_output(report: &Report, options: &Options) -> String {
     let names: Vec<&str> = hit_names(report).collect();
-    let array = serde_json::to_string(&names).unwrap_or_else(|_| "[]".to_owned());
-    format!("affected={array}\nany={}\n", !names.is_empty())
+    let mut files: Vec<String> = Vec::new();
+    for name in &names {
+        let root = options.entries.iter().find(|(entry, _)| entry == name).and_then(|(_, entry)| match entry {
+            Entry::Tsconfig(path) => Some(path),
+            Entry::Files(paths) => paths.first(),
+            _ => None,
+        });
+        if let Some(root) = root.map(|path| path.to_string_lossy().replace('\\', "/"))
+            && !files.contains(&root)
+        {
+            files.push(root);
+        }
+    }
+    format!(
+        "affected={}\nany={}\nfiles={}\nmatrix={{\"entry\":{}}}\ncount={}\ntotal={}\n",
+        to_json(&names),
+        !names.is_empty(),
+        to_json(&files),
+        to_json(&names),
+        names.len(),
+        report.entries.len()
+    )
+}
+
+fn to_json<T: Serialize + ?Sized>(value: &T) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "[]".to_owned())
 }
 
 #[derive(Serialize)]

@@ -50,7 +50,7 @@ fn run() -> Result<u8, Error> {
             .create(true)
             .append(true)
             .open(&file)
-            .and_then(|mut out| out.write_all(render::github_output(&report).as_bytes()))
+            .and_then(|mut out| out.write_all(render::github_output(&report, &options).as_bytes()))
             .map_err(|error| Error::Failed(format!("{}: {error}", file.to_string_lossy())))?;
     }
     let any = render::hit_names(&report).next().is_some();

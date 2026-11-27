@@ -10,8 +10,9 @@ use crate::Error;
 pub const USAGE: &str = "Usage: affected --entry <name>=<tsconfig.json | file,file…> [options]
 
 Options:
-  --entry, -e <name>=<paths>  Entry to check; repeat for several
-  --base, -b <ref>            Compare against the fork point of <ref>; \"auto\" picks the CI target branch
+  --entry, -e <name>=<paths>  Entry to check: a tsconfig.json, or files and globs, comma-separated
+  --entry, -e <glob>          One entry per matching file, named by its path; repeat for several
+  --base, -b <ref>            Compare against the fork point of <ref> (default: auto, the CI target branch)
   --changed, -c <file>        A changed file; repeat for several, or pass - to read lines from stdin
   --committed                 With --base, ignore uncommitted and untracked files
   --no-types                  Do not follow `import type`
@@ -22,7 +23,7 @@ Options:
   --config <file>             Read entries, globals, base, strict and types from JSON (default: ./affected.config.json)
   --json                      Print the full report as JSON
   --names                     Print the names of the hit entries, one per line
-  --github-output             Append `affected` (JSON array of hit names) and `any` to $GITHUB_OUTPUT
+  --github-output             Append affected, any, files, matrix, count and total to $GITHUB_OUTPUT
   --exit-code                 Exit 0 when an entry is hit, 1 when none is
   --help, -h                  Show this help
   --version, -V               Print the version
@@ -44,10 +45,25 @@ pub enum Changed {
     Stdin,
 }
 
+/// One `--entry` flag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EntrySpec {
+    /// `name=a,b`, unsplit; each path may be a glob.
+    Named(String, String),
+    /// A bare glob: one entry per matching file, named by its path.
+    Glob(String),
+}
+
+/// Whether `path` is a glob rather than a literal path.
+#[must_use]
+pub fn is_glob(path: &str) -> bool {
+    path.contains(['*', '?', '[', ']', '{', '}'])
+}
+
 #[derive(Debug, Default)]
 pub struct Args {
-    /// `--entry name=a,b`, in order, unsplit.
-    pub entries: Vec<(String, String)>,
+    /// `--entry` flags, in order.
+    pub entries: Vec<EntrySpec>,
     pub base: Option<String>,
     pub changed: Option<Vec<Changed>>,
     pub committed: bool,
@@ -87,7 +103,13 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, Error>
     while let Some(arg) = parser.next().map_err(usage)? {
         match arg {
             Short('e') | Long("entry") => {
-                args.entries.push(pair(parser.value().map_err(usage)?.string().map_err(usage)?, "--entry")?);
+                let spec = parser.value().map_err(usage)?.string().map_err(usage)?;
+                args.entries.push(if !spec.contains('=') && is_glob(&spec) {
+                    EntrySpec::Glob(spec)
+                } else {
+                    let (name, paths) = pair(spec, "--entry")?;
+                    EntrySpec::Named(name, paths)
+                });
             }
             Short('b') | Long("base") => args.base = Some(parser.value().map_err(usage)?.string().map_err(usage)?),
             Short('c') | Long("changed") => {
@@ -128,7 +150,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, Error>
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, Changed, Command, parse};
+    use super::{Args, Changed, Command, EntrySpec, parse};
     use crate::Error;
 
     fn run(args: &[&str]) -> Result<Args, Error> {
@@ -141,7 +163,15 @@ mod tests {
     #[test]
     fn short_long_and_inline_values() {
         let args = run(&["-e", "a=x.ts,y.ts", "--entry=b=t.json", "-btrunk", "-c", "-", "--changed", "z.ts"]).unwrap();
-        assert_eq!(args.entries, [("a".into(), "x.ts,y.ts".into()), ("b".into(), "t.json".into())]);
+        assert_eq!(
+            args.entries,
+            [EntrySpec::Named("a".into(), "x.ts,y.ts".into()), EntrySpec::Named("b".into(), "t.json".into())]
+        );
+        let globs = run(&["-e", "src/**/*.test.ts", "-e", "x=src/*.ts"]).unwrap();
+        assert_eq!(
+            globs.entries,
+            [EntrySpec::Glob("src/**/*.test.ts".into()), EntrySpec::Named("x".into(), "src/*.ts".into())]
+        );
         assert_eq!(args.base.as_deref(), Some("trunk"));
         assert_eq!(args.changed, Some(vec![Changed::Stdin, Changed::Path("z.ts".into())]));
     }

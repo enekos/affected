@@ -9,7 +9,7 @@ pub mod render;
 use std::path::{Path, PathBuf};
 
 use affected_core::{Entry, Options, TraceEdge};
-pub use args::{Args, Changed, Command, USAGE};
+pub use args::{Args, Changed, Command, EntrySpec, USAGE, is_glob};
 pub use base::detect_base;
 pub use config::Config;
 
@@ -59,11 +59,37 @@ impl std::fmt::Debug for Context<'_> {
 pub fn options(args: &Args, config: Option<Config>, context: Context<'_>) -> Result<Options, Error> {
     let config = config.unwrap_or_default();
     let mut entries = config.entries;
-    for (name, list) in &args.entries {
-        let entry = config::EntryConfig { paths: list.split(',').map(str::to_owned).collect(), inputs: Vec::new() };
-        match entries.iter_mut().find(|(existing, _)| existing == name) {
+    let mut set = |name: String, paths: Vec<String>| {
+        let entry = config::EntryConfig { paths, inputs: Vec::new() };
+        match entries.iter_mut().find(|(existing, _)| *existing == name) {
             Some((_, existing)) => *existing = entry,
-            None => entries.push((name.clone(), entry)),
+            None => entries.push((name, entry)),
+        }
+    };
+    let expand = |glob: &str| {
+        affected_core::expand(&context.cwd, &[glob.to_owned()], &[]).map_err(|error| Error::Failed(error.to_string()))
+    };
+    for spec in &args.entries {
+        match spec {
+            EntrySpec::Glob(glob) => {
+                let files = expand(glob)?;
+                if files.is_empty() {
+                    return Err(Error::Usage(format!("--entry {glob} matches no files")));
+                }
+                for file in files {
+                    set(file.clone(), vec![file]);
+                }
+            }
+            EntrySpec::Named(name, list) => {
+                let mut paths = Vec::new();
+                for path in list.split(',') {
+                    if is_glob(path) { paths.extend(expand(path)?) } else { paths.push(path.to_owned()) }
+                }
+                if paths.is_empty() {
+                    return Err(Error::Usage(format!("--entry {name}={list} matches no files")));
+                }
+                set(name.clone(), paths);
+            }
         }
     }
     if entries.is_empty() {
@@ -80,10 +106,7 @@ pub fn options(args: &Args, config: Option<Config>, context: Context<'_>) -> Res
         Some(changed) => Some(changed_files(changed, context.stdin)?),
         None => None,
     };
-    let base = args.base.clone().or(config.base);
-    if base.is_none() && changed.is_none() {
-        return Err(Error::Usage("pass --base or --changed".into()));
-    }
+    let base = args.base.clone().or(config.base).or_else(|| changed.is_none().then(|| "auto".to_owned()));
 
     let mut globals = config.globals;
     globals.extend(args.globals.iter().cloned());

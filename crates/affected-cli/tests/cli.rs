@@ -161,18 +161,25 @@ fn help_and_version_exit_0() {
 }
 
 #[test]
-fn github_output_appends_hit_names_and_any() {
+fn github_output_appends_the_node_cli_outputs() {
     let repo = Repo::new();
     let file = repo.path().join("github-output");
     fs::write(&file, "previous=1\n").unwrap();
     let output = repo.command(&args(&["-b", "main", "--github-output"])).env("GITHUB_OUTPUT", &file).output().unwrap();
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
-    assert_eq!(fs::read_to_string(&file).unwrap(), "previous=1\naffected=[\"app\"]\nany=true\n");
+    assert_eq!(
+        fs::read_to_string(&file).unwrap(),
+        "previous=1\naffected=[\"app\"]\nany=true\nfiles=[\"app/index.ts\"]\nmatrix={\"entry\":[\"app\"]}\ncount=1\ntotal=2\n"
+    );
 
     let none =
         repo.command(&args(&["-c", "README.md", "--github-output"])).env("GITHUB_OUTPUT", &file).output().unwrap();
     assert_eq!(none.status.code(), Some(0));
-    assert!(fs::read_to_string(&file).unwrap().ends_with("affected=[]\nany=false\n"));
+    assert!(
+        fs::read_to_string(&file)
+            .unwrap()
+            .ends_with("affected=[]\nany=false\nfiles=[]\nmatrix={\"entry\":[]}\ncount=0\ntotal=2\n")
+    );
 
     let unset = repo.run(&args(&["-b", "main", "--github-output"]));
     assert_eq!(unset.status.code(), Some(2));
@@ -257,4 +264,17 @@ fn base_auto_reads_the_ci_target_branch() {
     assert_eq!(names(&[]).0, Some(2));
     repo.git(&["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
     assert_eq!(names(&[]), (Some(0), "app\n".into()));
+}
+
+#[test]
+fn glob_entries_expand_to_one_entry_per_file() {
+    let repo = Repo::new();
+    let names = repo.run(&["-e", "*/index.ts", "-b", "main", "--names"]);
+    assert_eq!(names.status.code(), Some(0), "{}", stderr(&names));
+    assert_eq!(stdout(&names), "app/index.ts\n");
+    let group = repo.run(&["-e", "all=*/index.ts", "-b", "main", "--names"]);
+    assert_eq!(stdout(&group), "all\n");
+    let none = repo.run(&["-e", "nothing/**/*.ts", "-b", "main"]);
+    assert_eq!(none.status.code(), Some(2));
+    assert!(stderr(&none).contains("matches no files"));
 }
