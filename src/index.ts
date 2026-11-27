@@ -4,6 +4,9 @@ import type * as Native from '../native.cjs'
 const native: typeof Native = createRequire(import.meta.url)('../native.cjs')
 
 export { compareShadow, shadowPlan, type ShadowPlan } from './shadow.ts'
+export { defineConfig, findConfig, loadConfig, parseConfig, type AffectedConfig, type Runner } from './config.ts'
+export { detectRunner, discoverTests, testEntries, type DiscoverOptions, type TestFile, type TestSuite } from './tests.ts'
+export { FORMATS, firstRoot, githubOutput, githubSummary, render, runnerArgs, selectedPaths, substitute, type Format } from './select.ts'
 
 export interface TraceEdge {
   readonly from: string
@@ -19,6 +22,29 @@ export function fromNftTrace(trace: { reasons: ReadonlyMap<string, { parents: Re
     for (const from of reason.parents) edges.push({ from, to, ...(revision && { revision }) })
   }
   return edges
+}
+
+const GLOB = /[*?[\]{}]/
+
+/** Whether `path` is a glob rather than a literal path. */
+export function isGlob(path: string): boolean {
+  return GLOB.test(path)
+}
+
+/**
+ * Files matching the globs, relative to `cwd`, sorted. A pattern starting with `!` excludes.
+ * In a git work tree only files git does not ignore match.
+ */
+export function expandGlobs(patterns: string | readonly string[], cwd = process.cwd()): string[] {
+  const list = typeof patterns === 'string' ? [patterns] : patterns
+  const include = list.filter(pattern => !pattern.startsWith('!'))
+  const exclude = list.filter(pattern => pattern.startsWith('!')).map(pattern => pattern.slice(1))
+  return native.expand(cwd, include, exclude)
+}
+
+/** One entry per matching file, named by its path: `entries: globEntries('src/**\/*.test.ts')`. */
+export function globEntries(patterns: string | readonly string[], cwd = process.cwd()): Record<string, string> {
+  return Object.fromEntries(expandGlobs(patterns, cwd).map(path => [path, path]))
 }
 
 /** A tsconfig path, or one or more source files resolved with their nearest tsconfig. */

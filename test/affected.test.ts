@@ -130,7 +130,8 @@ test('the CLI lists hit names and writes GitHub outputs', t => {
 
   const names = run('-e', 'jobs=jobs/tsconfig.json', '-e', 'web=web/main.ts', '-b', 'main', '--names', '--github-output')
   assert.equal(names.stdout, 'web\n')
-  assert.equal(readFileSync(output, 'utf8'), 'affected=["web"]\nany=true\n')
+  assert.equal(readFileSync(output, 'utf8'),
+    'affected=["web"]\nany=true\nfiles=["web/main.ts"]\nmatrix={"entry":["web"]}\ncount=1\ntotal=2\n')
 
   const global = run('-e', 'jobs=jobs/tsconfig.json', '-b', 'main', '-g', 'global.yml', '--names')
   assert.equal(global.stdout, 'jobs\n')
