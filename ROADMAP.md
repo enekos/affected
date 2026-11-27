@@ -44,8 +44,9 @@ Goal: a repo with Vitest or Jest goes from zero to selective tests in one copy-p
 - [x] **Glob entries.** `-e 'src/**/*.test.ts'` makes one entry per match, named by path.
 - [x] **Config file.** `affected.config.{ts,json}` for entries, globals and inputs, shared by CI, local
       runs, the Action and the MCP server. `defineConfig` keeps entry names typed.
-- [ ] **pnpm and Yarn lockfiles.** Precise comparisons. Most monorepos use pnpm, and today a
-      `pnpm-lock.yaml` change selects everything.
+- [x] **pnpm and Yarn lockfiles.** Precise comparisons for pnpm v6/v9 and Yarn Berry, so a lockfile
+      change selects the importers whose dependency closure changed. Yarn classic and Bun still select
+      everything.
 - [x] **Standalone binary.** Release assets for static Linux, macOS and Windows, `cargo binstall --git` metadata and a Homebrew formula template (the tap and a crates.io name are open), so Bun,
       Deno and non-Node CI images work. Settle the crate name first (`affected-core` is taken).
 

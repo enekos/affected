@@ -50,6 +50,11 @@ if (result.any) {
 }
 ```
 
+Leave lockfiles out of `globals`: a change to `package-lock.json`, `pnpm-lock.yaml` or a Yarn Berry
+`yarn.lock` already selects only the tests importing a dependency whose resolution changed, transitively.
+Lockfiles the selector cannot compare (Yarn classic, Bun, unknown versions, changed settings or
+overrides) select every test.
+
 ## Verify selection while running the full suite
 
 Capture one entry per test file. The first root is the path matched against the runner report. In CI store both artifacts outside the working tree and compare results in the same checkout.

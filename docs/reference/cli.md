@@ -52,7 +52,7 @@ runs share. In TypeScript, `defineConfig` keeps entry names typed:
 
 ```ts
 import { defineConfig } from '@enekos/affected'
-export default defineConfig({ entries: { api: 'apps/api/tsconfig.json' }, globals: ['pnpm-lock.yaml'] })
+export default defineConfig({ entries: { api: 'apps/api/tsconfig.json' }, globals: ['.github/workflows/test.yml'] })
 ```
 
 A `tests` key (`{ "runner": "jest", "config": "jest.ci.config.js" }`) configures `affected tests`.
@@ -64,7 +64,7 @@ A `tests` key (`{ "runner": "jest", "config": "jest.ci.config.js" }`) configures
     "web": ["src/main.ts", "src/worker.ts"],
     "prompts": { "from": "packages/prompts/tsconfig.json", "inputs": ["packages/prompts/**/*.md"] }
   },
-  "globals": ["pnpm-lock.yaml"],
+  "globals": [".github/workflows/test.yml"],
   "base": "auto",
   "strict": true
 }

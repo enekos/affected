@@ -56,8 +56,13 @@ what they load with [`inputs`](reference/api.html#entries).
 - **Installed packages** are leaves. Each stands for its version range in the nearest `package.json` that
   declares it — a node shown as `package.json#zod`. A diff hits that node only when the range changes,
   so bumping `zod` hits exactly the files importing `zod`, and editing `scripts` hits nothing.
-- **Lockfile-only** changes (a transitive bump with the same range) are not tracked yet; add the lockfile
-  to [`globals`](reference/api.html#options) if they matter to you.
+- **Lockfile** changes are compared on both revisions for npm (`package-lock.json`, v2/v3), pnpm
+  (`pnpm-lock.yaml`, v6 and v9) and Yarn Berry (`yarn.lock`, v2+). A dependency hits when its own
+  resolution changes or anything it transitively reaches does, peer-resolved snapshots included, so a
+  transitive bump hits the files importing the package that pulls it in. A change to a linked workspace
+  package's resolutions also hits its `link:` dependents. Settings, overrides, patches, an unknown format
+  version, Yarn classic (v1, which records no peer or workspace information) and Bun lockfiles select
+  every entry.
 
 ## Limits
 
