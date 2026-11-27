@@ -10,6 +10,7 @@ All notable changes to this project are documented here. The format follows
 - npm v2/v3 lockfile changes select transitive consumers. Missing or unsupported lockfile information selects all entries.
 - Fixed runtime and declaration export conditions, dynamic import comments, file-entry tsconfig inputs, config parent precedence, tracked symlinks, committed snapshots, module-relative CLI paths and Vite glob exclusions.
 - CLI option errors exit 2. CI examples propagate analysis errors.
+- Standalone `affected` binary (Rust crate `affected-ts`) for CI without Node: static Linux musl, macOS and Windows builds on each GitHub release with sha256 files, `cargo binstall` metadata and a Homebrew formula template. Same flags and output as the Node CLI except shadow mode; reads `affected.config.json` and adds `--version`.
 
 ## [0.1.0] - 2026-11-26
 

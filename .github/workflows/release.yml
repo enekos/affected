@@ -45,11 +45,20 @@ jobs:
           pattern: bindings-*
           path: bindings
           merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: binary-*
+          path: binaries
+          merge-multiple: true
       - name: Release notes from CHANGELOG
         run: |
           version="${GITHUB_REF_NAME#v}"
           awk -v v="$version" '/^## \[/{p = index($0, "[" v "]") > 0; next} p' CHANGELOG.md > notes.md
           printf '\n**npm:** https://www.npmjs.com/package/@enekos/affected/v/%s\n' "$version" >> notes.md
-      - run: gh release create "$GITHUB_REF_NAME" bindings/*.node --title "$GITHUB_REF_NAME" --notes-file notes.md $([[ "$GITHUB_REF_NAME" == *-* ]] && echo --prerelease)
+          cat >> notes.md <<'NOTES'
+
+          **Without Node:** `affected-<target>.tar.gz` (`.zip` on Windows), each with a `.sha256`, or `cargo binstall --git https://github.com/enekos/affected affected-ts`.
+          NOTES
+      - run: gh release create "$GITHUB_REF_NAME" bindings/*.node binaries/* --title "$GITHUB_REF_NAME" --notes-file notes.md $([[ "$GITHUB_REF_NAME" == *-* ]] && echo --prerelease)
         env:
           GH_TOKEN: ${{ github.token }}

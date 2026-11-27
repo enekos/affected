@@ -1,0 +1,53 @@
+[package]
+# crates.io: `affected`, `affected-cli` and `affected-core` belong to other projects; `affected-ts` is free.
+name = "affected-ts"
+description = "The affected CLI without Node: which TypeScript entry points a git diff reaches"
+version.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["typescript", "dependency-graph", "monorepo", "git", "ci"]
+categories = ["development-tools", "development-tools::testing", "command-line-utilities"]
+# Publishing waits on the crate names (and on affected-core, which this depends on).
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "affected_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "affected"
+path = "src/main.rs"
+
+[dependencies]
+affected-core.workspace = true
+lexopt.workspace = true
+serde.workspace = true
+# Config entries keep their declaration order, like `Object.entries` in the Node CLI.
+serde_json = { workspace = true, features = ["preserve_order"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
+
+# Release assets are `affected-<target>.tar.gz` (`.zip` on Windows) holding the binary at the root.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/affected-{ target }.tar.gz"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+# Linux ships static musl binaries only; they run on glibc systems too.
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/affected-x86_64-unknown-linux-musl.tar.gz"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/affected-aarch64-unknown-linux-musl.tar.gz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/affected-{ target }.zip"
+pkg-fmt = "zip"

@@ -33,6 +33,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "affected-ts"
+version = "0.1.0"
+dependencies = [
+ "affected-core",
+ "lexopt",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -501,6 +512,12 @@ checksum = "e6da542c53c54a5df6dc91dff7dab9f196fd5f860162694782525290c58f1de9"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "lexopt"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "803ec87c9cfb29b9d2633f20cba1f488db3fd53f2158b1024cbefb47ba05d413"
 
 [[package]]
 name = "libc"
