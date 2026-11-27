@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-27
+
 - `affected tests` asks Vitest (3+) or Jest which test files and setup files it would run, and makes one entry per test file. Setup files are extra roots of each entry; runner configs are globals.
 - A command after `--` runs with the selection: `{files}` and `{names}` expand to it, an empty selection skips it, and a failed analysis runs it on everything. Strict selection is the default with `tests` and with a command.
 - `--format paths|vitest|jest|playwright` prints the hit files, or runner arguments that run exactly them or nothing. `--json` and `--names` remain as short forms.
@@ -41,5 +43,6 @@ First release.
 - CLI `--json`, `--names`, `--github-output`, `--exit-code`, stdin changed lists.
 - Prebuilt binaries for macOS (arm64, x64), Linux (x64, arm64; glibc and musl) and Windows x64.
 
-[Unreleased]: https://github.com/enekos/affected/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/enekos/affected/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/enekos/affected/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/enekos/affected/releases/tag/v0.1.0
