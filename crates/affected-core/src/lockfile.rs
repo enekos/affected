@@ -6,6 +6,7 @@
 mod npm;
 mod pnpm;
 mod yaml;
+mod yarn;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -164,7 +165,8 @@ pub(crate) fn compare(head: &impl Source, base: Option<&impl Source>, changed: &
         let comparison = match path.file_name().and_then(|p| p.to_str()) {
             Some("package-lock.json" | "npm-shrinkwrap.json") => base.and_then(|b| npm::changed(head, b, path)),
             Some("pnpm-lock.yaml" | "pnpm-lock.yml") => base.and_then(|b| precise(head, b, path, pnpm::resolution)),
-            Some("yarn.lock" | "bun.lock" | "bun.lockb") => None,
+            Some("yarn.lock") => base.and_then(|b| precise(head, b, path, yarn::resolution)),
+            Some("bun.lock" | "bun.lockb") => None,
             _ => continue,
         };
         match comparison {
