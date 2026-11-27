@@ -325,8 +325,8 @@ fn an_entry_deleted_by_the_change_hits_through_the_fork_point() {
 #[test]
 fn global_and_entry_inputs_hit_without_an_import() {
     let repo =
-        Repo::new(&[("a.ts", "export {}"), ("b.ts", "export {}"), ("pnpm-lock.yaml", "v1"), ("templates/a.hbs", "hi")]);
-    repo.write(&[("pnpm-lock.yaml", "v2"), ("templates/a.hbs", "hello")]);
+        Repo::new(&[("a.ts", "export {}"), ("b.ts", "export {}"), ("global.yml", "v1"), ("templates/a.hbs", "hi")]);
+    repo.write(&[("global.yml", "v2"), ("templates/a.hbs", "hello")]);
     let entries = Options::new(repo.path())
         .entry("a", Entry::Files(vec!["a.ts".into()]))
         .entry("b", Entry::Files(vec!["b.ts".into()]))
@@ -334,6 +334,113 @@ fn global_and_entry_inputs_hit_without_an_import() {
     let report = analyze(&entries.clone().inputs("a", vec!["templates/**".into()])).unwrap();
     assert_eq!(report.entries[0].hits, ["templates/a.hbs"]);
     assert!(!report.entries[1].is_hit());
-    let report = analyze(&entries.globals(vec!["pnpm-lock.yaml".into()])).unwrap();
-    assert_eq!(report.entries[1].chain, ["pnpm-lock.yaml"]);
+    let report = analyze(&entries.globals(vec!["global.yml".into()])).unwrap();
+    assert_eq!(report.entries[1].chain, ["global.yml"]);
+}
+
+#[test]
+fn resolves_value_and_declaration_exports_in_the_callers_mode() {
+    let repo = Repo::new(&[
+        (
+            "package.json",
+            r#"{"name":"dual","exports":{"types":"./types.d.ts","import":"./esm.mjs","require":"./cjs.cjs"}}"#,
+        ),
+        ("types.d.ts", "export declare const n: number"),
+        ("esm.mjs", "export const n = 1"),
+        ("cjs.cjs", "exports.n = 1"),
+        ("e.mjs", "import /* lazy */ ('dual')"),
+        ("c.cjs", "require('dual')"),
+    ]);
+    let entries = Options::new(repo.path())
+        .entry("esm", Entry::Files(vec!["e.mjs".into()]))
+        .entry("cjs", Entry::Files(vec!["c.cjs".into()]))
+        .base("main");
+    let runtime = analyze(&entries.clone().types(false).changed(vec!["cjs.cjs".into()])).unwrap();
+    assert!(!runtime.entries[0].is_hit());
+    assert_eq!(runtime.entries[1].hits, ["cjs.cjs"]);
+    let types = analyze(&entries.changed(vec!["types.d.ts".into(), "esm.mjs".into()])).unwrap();
+    assert_eq!(types.entries[0].hits, ["esm.mjs", "types.d.ts"]);
+    assert_eq!(types.entries[1].hits, ["types.d.ts"]);
+}
+
+#[test]
+fn file_entries_track_their_config_and_last_parent_precedence() {
+    let repo = Repo::new(&[
+        ("tsconfig.json", r#"{"extends":["./first.json","./last.json"]}"#),
+        ("first.json", r#"{"files":["a.ts"]}"#),
+        ("last.json", r#"{"files":["b.ts"]}"#),
+        ("a.ts", ""),
+        ("b.ts", "export const value = 1"),
+    ]);
+    repo.write(&[("b.ts", "export const value = 2")]);
+    assert_eq!(repo.analyze(config("tsconfig.json")).hits, ["b.ts"]);
+    repo.write(&[("last.json", r#"{"files":["b.ts"],"compilerOptions":{"strict":true}}"#)]);
+    assert!(repo.analyze(Entry::Files(vec!["a.ts".into()])).hits.contains(&"last.json".to_owned()));
+}
+
+#[test]
+fn committed_graph_ignores_a_dirty_importer() {
+    let repo = Repo::new(&[("entry.mjs", "import('./plugin.mjs').catch(() => {})")]);
+    repo.branch("new-plugin");
+    repo.write(&[("plugin.mjs", "export default 2")]);
+    repo.commit("install plugin");
+    repo.write(&[("entry.mjs", "export {}")]);
+    let options =
+        Options::new(repo.path()).entry("app", Entry::Files(vec!["entry.mjs".into()])).base("main").uncommitted(false);
+    let report = analyze(&options).unwrap();
+    assert_eq!(report.changed, ["plugin.mjs"]);
+    assert_eq!(report.entries[0].chain, ["entry.mjs", "plugin.mjs"]);
+}
+
+#[test]
+fn negative_globs_apply_only_to_their_own_call() {
+    let repo = Repo::new(&[
+        ("entry.ts", "import.meta.glob(['./pages/*.ts','!./pages/draft.ts'])"),
+        ("pages/draft.ts", ""),
+        ("pages/live.ts", ""),
+    ]);
+    repo.write(&[("pages/draft.ts", "export default 1")]);
+    let entry = Entry::Files(vec!["entry.ts".into()]);
+    assert!(!repo.analyze(entry.clone()).is_hit());
+    repo.write(&[("entry.ts", "import.meta.glob(['./pages/*.ts','!./pages/draft.ts']); import './pages/draft.ts'")]);
+    assert!(repo.analyze(entry).hits.contains(&"pages/draft.ts".to_owned()));
+}
+
+#[cfg(unix)]
+#[test]
+fn retargeting_a_link_keeps_both_implementations() {
+    let repo = Repo::new(&[("main.mjs", "import './alias.mjs'"), ("a.mjs", ""), ("b.mjs", "")]);
+    std::os::unix::fs::symlink("a.mjs", repo.path().join("alias.mjs")).unwrap();
+    repo.commit("first target");
+    repo.remove("alias.mjs");
+    std::os::unix::fs::symlink("b.mjs", repo.path().join("alias.mjs")).unwrap();
+    let report = repo.analyze(Entry::Files(vec!["main.mjs".into()]));
+    assert_eq!(report.hits, ["alias.mjs"]);
+    assert!(report.files.contains(&"a.mjs".to_owned()) && report.files.contains(&"b.mjs".to_owned()));
+}
+
+#[test]
+fn npm_lockfile_follows_transitive_consumers_and_falls_back_without_a_comparable_snapshot() {
+    let old = r#"{"lockfileVersion":3,"packages":{"":{"dependencies":{"a":"1","b":"1"}},
+        "node_modules/a":{"version":"1","dependencies":{"@s/leaf":"*"}},"node_modules/b":{"version":"1"},
+        "node_modules/@s/leaf":{"version":"1"},"node_modules/a/node_modules/@s/leaf":{"version":"2"}}}"#;
+    let repo = Repo::new(&[
+        ("package.json", r#"{"dependencies":{"a":"1","b":"1"}}"#),
+        ("package-lock.json", old),
+        ("a.mjs", "import 'a'"),
+        ("b.mjs", "import 'b'"),
+    ]);
+    let options = Options::new(repo.path())
+        .entry("a", Entry::Files(vec!["a.mjs".into()]))
+        .entry("b", Entry::Files(vec!["b.mjs".into()]))
+        .base("main");
+    repo.write(&[("package-lock.json", &old.replace("\"version\":\"2\"", "\"version\":\"3\""))]);
+    let report = analyze(&options).unwrap();
+    assert_eq!(report.entries[0].chain, ["a.mjs", "package.json#a", "package-lock.json"]);
+    assert!(!report.entries[1].is_hit());
+    repo.write(&[("package-lock.json", "{}")]);
+    assert!(analyze(&options).unwrap().entries.iter().all(EntryReport::is_hit));
+    assert!(
+        analyze(&options.clone().changed(vec!["yarn.lock".into()])).unwrap().entries.iter().all(EntryReport::is_hit)
+    );
 }

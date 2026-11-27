@@ -13,6 +13,12 @@ pub(crate) struct Git {
     root: PathBuf,
 }
 
+pub(crate) struct TreeBlob {
+    pub path: PathBuf,
+    pub oid: Box<str>,
+    pub link: bool,
+}
+
 impl Git {
     /// The repository containing `cwd`, or `None` outside a work tree.
     pub(crate) fn discover(cwd: &Path) -> Option<Self> {
@@ -77,7 +83,7 @@ impl Git {
     }
 
     /// Every blob in `revision` as (repository-relative path, object id).
-    pub(crate) fn ls_tree(&self, revision: &str) -> Result<Vec<(PathBuf, Box<str>)>, Error> {
+    pub(crate) fn ls_tree(&self, revision: &str) -> Result<Vec<TreeBlob>, Error> {
         let output = self.run(&["ls-tree", "-r", "-z", "--full-tree", revision])?;
         let mut blobs = Vec::new();
         for line in Self::lines(&output) {
@@ -86,8 +92,8 @@ impl Git {
             let (Some(mode), Some(kind), Some(object)) = (fields.next(), fields.next(), fields.next()) else {
                 continue;
             };
-            if kind == "blob" && mode != "120000" {
-                blobs.push((PathBuf::from(path), object.into()));
+            if kind == "blob" {
+                blobs.push(TreeBlob { path: path.into(), oid: object.into(), link: mode == "120000" });
             }
         }
         Ok(blobs)

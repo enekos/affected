@@ -7,13 +7,16 @@ use oxc_ast::ast::{
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::{ParseOptions, Parser};
-use oxc_span::SourceType;
+use oxc_span::{GetSpan, SourceType};
 
 /// How a request names its target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Kind {
     /// A module specifier, resolved like `import` resolves it.
     Module,
+    Require,
+    DynamicImport,
+    Unknown,
     /// A path relative to the importing file's directory: a `/// <reference path>`, an asset
     /// read through `join(__dirname, …)` or `new URL(…, import.meta.url)`. A directory stands
     /// for everything below it.
@@ -21,6 +24,7 @@ pub(crate) enum Kind {
     /// A glob relative to the importing file's directory: `import.meta.glob`,
     /// `require.context`, or a template-literal `import()` with substitutions.
     Glob,
+    GlobExcept(Vec<String>),
 }
 
 /// One module request found in a source file.
@@ -115,10 +119,11 @@ fn extract_script(source: &str, source_type: SourceType) -> Vec<Specifier> {
         }
     }
 
-    if needs_ast_walk(source) {
-        let mut visitor = Collector { found: &mut found };
-        visitor.visit_program(&parsed.program);
+    if !parsed.diagnostics.is_empty() {
+        found.push(Specifier { request: "syntax error".into(), type_only: false, kind: Kind::Unknown });
     }
+    let mut visitor = Collector { found: &mut found, source };
+    visitor.visit_program(&parsed.program);
     found
 }
 
@@ -138,14 +143,9 @@ fn triple_slash(text: &str) -> Option<Specifier> {
     Some(Specifier { request: request.into(), type_only: true, kind })
 }
 
-fn needs_ast_walk(source: &str) -> bool {
-    ["require", "import(", "import (", "import.meta", "__dirname", "mock", "Mock", "Actual"]
-        .iter()
-        .any(|needle| source.contains(needle))
-}
-
 struct Collector<'s> {
     found: &'s mut Vec<Specifier>,
+    source: &'s str,
 }
 
 /// The text of a string literal, or of a template literal without substitutions.
@@ -235,6 +235,10 @@ impl Collector<'_> {
         self.found.push(Specifier { request: request.into(), type_only: false, kind });
     }
 
+    fn unknown(&mut self, expression: &impl GetSpan) {
+        self.push(expression.span().source_text(self.source), Kind::Unknown);
+    }
+
     fn push_module(&mut self, request: Option<&str>) {
         if let Some(request) = request {
             self.push(request, Kind::Module);
@@ -248,11 +252,20 @@ impl Collector<'_> {
             .iter()
             .any(|name| callee.is_specific_id(*name) || callee.is_specific_member_access("path", name));
         let Some((first, rest)) = call.arguments.split_first() else { return };
-        if !is_path_call || rest.is_empty() || !first.as_expression().is_some_and(is_dirname) {
+        let Some(origin) = first.as_expression() else { return };
+        // fileURLToPath(import.meta.url) starts at the file itself, so the first ".." names its directory.
+        let file_url = matches!(origin, Expression::CallExpression(call)
+            if (call.callee.is_specific_id("fileURLToPath") || call.callee.is_specific_member_access("url", "fileURLToPath"))
+            && call.arguments.first().and_then(Argument::as_expression).is_some_and(|arg| is_import_meta(arg, "url")));
+        if !is_path_call || rest.is_empty() || !(is_dirname(origin) || file_url) {
             return;
         }
         let segments: Option<Vec<&str>> = rest.iter().map(|argument| argument_literal(Some(argument))).collect();
         if let Some(segments) = segments {
+            let mut segments = segments.into_iter();
+            if file_url && segments.next() != Some("..") {
+                return;
+            }
             let mut request = String::from(".");
             for segment in segments {
                 request.push('/');
@@ -263,7 +276,7 @@ impl Collector<'_> {
     }
 
     /// `import.meta.glob('./a/*.ts')`, `import.meta.glob(['./a/*', '!./a/skip.ts'])`.
-    /// Negated patterns are ignored, which can only widen the match.
+    /// Each call owns its exclusions so another glob or direct import can still include the same file.
     fn import_meta_glob(&mut self, call: &CallExpression<'_>) {
         let Some(argument) = call.arguments.first().and_then(Argument::as_expression) else { return };
         let patterns: Vec<&str> = match argument.get_inner_expression() {
@@ -272,8 +285,9 @@ impl Collector<'_> {
             }
             other => literal(other).into_iter().collect(),
         };
+        let excluded: Vec<String> = patterns.iter().filter_map(|p| p.strip_prefix('!').map(str::to_owned)).collect();
         for pattern in patterns.into_iter().filter(|pattern| !pattern.starts_with('!')) {
-            self.push(pattern, Kind::Glob);
+            self.push(pattern, if excluded.is_empty() { Kind::Glob } else { Kind::GlobExcept(excluded.clone()) });
         }
     }
 
@@ -293,13 +307,23 @@ impl<'a> Visit<'a> for Collector<'_> {
     fn visit_call_expression(&mut self, it: &CallExpression<'a>) {
         let callee = it.callee.get_inner_expression();
         if let Some(literal) = it.common_js_require() {
-            self.push_module(literal.value.as_str());
+            if let Some(request) = literal.value.as_str() {
+                self.push(request, Kind::Require);
+            }
         } else if callee.is_specific_id("require") {
             if let Some(pattern) = it.arguments.first().and_then(Argument::as_expression).and_then(dynamic_glob) {
                 self.push(pattern, Kind::Glob);
+            } else if let Some(request) = argument_literal(it.arguments.first()) {
+                self.push(request, Kind::Require);
+            } else {
+                self.unknown(it);
             }
         } else if callee.is_specific_member_access("require", "resolve") {
-            self.push_module(argument_literal(it.arguments.first()));
+            if let Some(request) = argument_literal(it.arguments.first()) {
+                self.push(request, Kind::Require);
+            } else {
+                self.unknown(it);
+            }
         } else if callee.is_specific_member_access("require", "context") {
             self.require_context(it);
         } else if is_import_meta(callee, "glob") {
@@ -329,9 +353,11 @@ impl<'a> Visit<'a> for Collector<'_> {
 
     fn visit_import_expression(&mut self, it: &ImportExpression<'a>) {
         if let Some(request) = literal(&it.source) {
-            self.push(request, Kind::Module);
+            self.push(request, Kind::DynamicImport);
         } else if let Some(pattern) = dynamic_glob(&it.source) {
             self.push(pattern, Kind::Glob);
+        } else {
+            self.unknown(it);
         }
         walk::walk_import_expression(self, it);
     }
@@ -343,7 +369,7 @@ impl<'a> Visit<'a> for Collector<'_> {
             self.found.push(Specifier {
                 request: request.into(),
                 type_only: it.import_kind.is_type(),
-                kind: Kind::Module,
+                kind: Kind::Require,
             });
         }
         walk::walk_ts_import_equals_declaration(self, it);
@@ -364,7 +390,7 @@ mod tests {
     fn requests(path: &str, source: &str) -> Vec<(String, bool)> {
         let mut found: Vec<_> = extract(Path::new(path), source)
             .into_iter()
-            .filter(|s| s.kind == Kind::Module)
+            .filter(|s| matches!(s.kind, Kind::Module | Kind::Require | Kind::DynamicImport))
             .map(|s| (s.request.into_string(), s.type_only))
             .collect();
         found.sort();
@@ -374,7 +400,7 @@ mod tests {
     fn of_kind(path: &str, source: &str, kind: Kind) -> Vec<String> {
         let mut found: Vec<_> = extract(Path::new(path), source)
             .into_iter()
-            .filter(|s| s.kind == kind)
+            .filter(|s| s.kind == kind || (kind == Kind::Glob && matches!(s.kind, Kind::GlobExcept(_))))
             .map(|s| s.request.into_string())
             .collect();
         found.sort();
@@ -488,11 +514,15 @@ mod tests {
             readFileSync(join(__dirname, 'prompt.md'))
             fs.readFileSync(path.resolve(import.meta.dirname, './templates', 'a.hbs'))
             new Worker(new URL('./worker.ts', import.meta.url))
+            join(fileURLToPath(import.meta.url), '..', '..', 'bin', 'cli.js')
             join(__dirname, name)
             join(root, 'x')
             new URL('https://example.com', import.meta.url)
         "#;
-        assert_eq!(of_kind("x.ts", source, Kind::File), ["./prompt.md", "./templates/a.hbs", "./worker.ts"]);
+        assert_eq!(
+            of_kind("x.ts", source, Kind::File),
+            ["./../bin/cli.js", "./prompt.md", "./templates/a.hbs", "./worker.ts"]
+        );
     }
 
     #[test]

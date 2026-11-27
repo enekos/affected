@@ -29,7 +29,29 @@ throw on invalid input (see [errors](#errors)).
 | `cwd` | `string` | `process.cwd()` | Paths in and out are relative to it. |
 | `uncommitted` | `boolean` | `true` | With `base`, include uncommitted and untracked files. |
 | `types` | `boolean` | `true` | Follow `import type` edges. Set `false` for runtime-only reachability. |
+| `strict` | `boolean` | `false` | Include uncertain entries on a nonempty diff. |
+| `trace` | `TraceEdge[]` | `[]` | Additional parent-to-child dependencies, optionally bound to a revision. |
 | `globals` | `string[]` | `[]` | Globs (relative to `cwd`) whose changes hit **every** entry. |
+
+## Selection policy and traced inputs
+
+`strict: true` selects entries with incomplete analysis when the diff contains changes. With the default `strict: false`, inspect `entry.status` and `entry.diagnostics` before skipping an entry. Diagnostics identify the file, expression and graph revision. A definite hit remains selected even when other imports in that entry are unresolved.
+
+npm package-lock and shrinkwrap v2/v3 changes follow resolved packages and transitive consumers on both revisions. A missing snapshot, unsupported npm format or unresolved required lockfile dependency selects every entry. Changes to pnpm, Yarn and Bun lockfiles also select every entry. A global glob for an npm lockfile explicitly selects every entry.
+
+Pass observed dependencies as `trace: [{ from, to, revision }]`. Paths are relative to `cwd`. Use `head` or `base` to bind an observation to its snapshot. Omitting the revision applies the edge to both. `why(name)` returns the existing path array. `why(name, { details: true })` adds `reason`, `revision` and `traceSteps` (the target of each traced edge along the chain). A strict fallback has reason `unknown` and an empty chain.
+
+```ts
+import { nodeFileTrace } from '@vercel/nft'
+import { affected, fromNftTrace } from '@enekos/affected'
+
+const cwd = process.cwd()
+const test = 'test/bin.test.js'
+const trace = await nodeFileTrace([test], { base: cwd, processCwd: cwd })
+const result = affected({ cwd, entries: { cli: test }, base: 'auto', strict: true,
+  trace: fromNftTrace(trace, 'head') })
+console.log(result.why('cli', { details: true }))
+```
 
 ## Entries
 

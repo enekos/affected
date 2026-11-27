@@ -27,23 +27,20 @@ comes before speed.
 
 Bazel's target-determinator rule: missing evidence is "unknown", never "unaffected".
 
-- [ ] **Diagnostics in the report:** relative imports that don't resolve, `import(variable)` with no
-      static part, globs with no static directory, and case mismatches (`./Foo` resolving to `foo.ts`
-      on macOS or Windows, which breaks on Linux CI and is the one scenario that still fails).
-- [ ] **`unknown` per entry** when one of its files has an unresolved dynamic edge. `--strict` counts
-      unknown as a hit; `--exit-code` gets a distinct code for it.
+- [x] Report unresolved module requests, computed imports and parser failures per entry and revision. `--strict` includes uncertain entries on nonempty diffs.
+- [ ] Diagnose path casing differences on case-insensitive filesystems and unsupported bundler patterns.
 - [ ] **Submodules:** a gitlink change counts as "everything below the submodule changed".
 - [ ] **Blobless clones** (`filter: blob:none`): prefetch the base blobs the walk needs in one
       `git cat-file --batch` round, not a lazy fetch per object.
-- [ ] **Lockfile-aware dependencies:** diff `pnpm-lock.yaml`, `package-lock.json` and `yarn.lock` per
-      importer, and hit the `<manifest>#<dep>` node when a resolved version changes, even when the range
-      in package.json doesn't. This is Nx `projectsAffectedByDependencyUpdates: auto` and Rush's
-      shrinkwrap slices. Today lockfile-only changes need `globals`.
+- [x] npm v2/v3 lockfile comparison follows each importer's transitive resolutions. Missing or unsupported lockfiles select every entry.
+- [ ] Add precise pnpm and Yarn lockfile comparisons.
 - [ ] **Base-side install:** the fork-point graph reads `node_modules` from the working tree. Resolve
       workspace packages from `pnpm-workspace.yaml` and package.json `workspaces` at the base revision
       instead.
 
 ## 0.3 — test selection and CI ergonomics
+
+- [x] Compare proposed selections with a full test run in shadow mode. Import observed edges, including Node File Trace reasons, and explain their revision.
 
 - [ ] **Glob entries:** `--entries '**/*.test.ts'` makes one entry per match, named by path. This is the
       `jest --findRelatedTests` / `vitest related` use case without listing files.

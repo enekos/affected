@@ -67,7 +67,7 @@ In GitHub Actions (`fetch-depth: 0`):
 
 ```yaml
 - id: affected
-  run: npx -y @enekos/affected --base auto --github-output -e api=apps/api/tsconfig.json -e prompts=packages/prompts/tsconfig.json -g pnpm-lock.yaml
+  run: npx -y @enekos/affected --strict --base auto --github-output -e api=apps/api/tsconfig.json -e prompts=packages/prompts/tsconfig.json -g pnpm-lock.yaml
 - run: pnpm eval:prompts
   if: contains(fromJSON(steps.affected.outputs.affected), 'prompts')
 ```
@@ -90,6 +90,12 @@ In GitHub Actions (`fetch-depth: 0`):
 The result has `hit`, `any`, `has(name)`, `why(name)`, `entry(name)` (`{ hit, hits, chain, files }`),
 `changed` and `toString()`. `affectedAsync` runs on the libuv thread pool.
 [Full API reference →](https://enekos.github.io/affected/reference/api.html)
+
+## Checking a CI selection
+
+Use `--strict` to include entries with unresolved imports. Each diagnostic names the file and revision. npm v2/v3 lockfiles select entries that import a changed dependency, including transitive updates. Changes to unsupported lockfiles select every entry.
+
+Use `--shadow-out selection.json` alongside a full test run, then `--compare-shadow selection.json --results vitest.json` to see which failing files the selector would have skipped. You can also supply observed parent–child edges from `@vercel/nft`. [Test selection guide](docs/guides/test-selection.md) · [Trace API](docs/reference/api.md)
 
 ## What counts as an edge
 
