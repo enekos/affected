@@ -1,6 +1,7 @@
 import { realpathSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import type { Affected, EntryInput } from './index.ts'
+import { firstRoot } from './select.ts'
 
 export interface ShadowPlan {
   version: 1
@@ -21,12 +22,6 @@ function canonical(path: string): string {
 
 function pathFrom(cwd: string, path: string): string {
   return relative(canonical(resolve(cwd)), canonical(resolve(cwd, path))).split(sep).join('/')
-}
-
-function firstRoot(input: EntryInput): string | undefined {
-  if (typeof input === 'string') return input
-  if ('from' in input) return firstRoot(input.from)
-  return input[0]
 }
 
 /** The first source root of each entry is its test file. Additional roots are supporting inputs. */

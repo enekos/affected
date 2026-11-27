@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use affected_core::{Entry, EntryReport, Options, analyze};
+use affected_core::{Entry, EntryReport, Options, analyze, expand};
 use tempfile::TempDir;
 
 struct Repo {
@@ -443,4 +443,170 @@ fn npm_lockfile_follows_transitive_consumers_and_falls_back_without_a_comparable
     assert!(
         analyze(&options.clone().changed(vec!["yarn.lock".into()])).unwrap().entries.iter().all(EntryReport::is_hit)
     );
+}
+
+#[test]
+fn expand_lists_unignored_files_relative_to_cwd() {
+    let repo = Repo::new(&[
+        (".gitignore", "dist/\n"),
+        ("pkg/src/a.test.ts", ""),
+        ("pkg/src/b.test.ts", ""),
+        ("pkg/dist/a.test.ts", ""),
+        ("other/c.test.ts", ""),
+    ]);
+    repo.write(&[("pkg/src/new.test.ts", "")]);
+    let globs = |patterns: &[&str]| patterns.iter().map(|p| (*p).to_owned()).collect::<Vec<_>>();
+    let cwd = repo.path().join("pkg");
+    assert_eq!(
+        expand(&cwd, &globs(&["**/*.test.ts"]), &[]).unwrap(),
+        ["src/a.test.ts", "src/b.test.ts", "src/new.test.ts"]
+    );
+    assert_eq!(
+        expand(&cwd, &globs(&["src/*.ts"]), &globs(&["src/b.*"])).unwrap(),
+        ["src/a.test.ts", "src/new.test.ts"]
+    );
+    assert!(expand(&cwd, &globs(&["["]), &[]).is_err());
+}
+
+const PNPM_V9: &str = include_str!("fixtures/pnpm-lock.v9.yaml");
+const PNPM_V6: &str = include_str!("fixtures/pnpm-lock.v6.yaml");
+const YARN_BERRY: &str = include_str!("fixtures/yarn.berry.lock");
+
+/// The workspace the lockfile fixtures were installed from: the root and `packages/{a,b,c}`,
+/// one entry per file importing a dependency.
+fn workspace(lockfile: &str, contents: &str) -> (Repo, Options) {
+    let repo = Repo::new(&[
+        ("package.json", r#"{"private":true,"workspaces":["packages/*"],"devDependencies":{"is-number":"7.0.0"}}"#),
+        ("packages/a/package.json", r#"{"name":"@ws/a","dependencies":{"debug":"4.3.4","@ws/b":"workspace:*"}}"#),
+        ("packages/b/package.json", r#"{"name":"@ws/b","dependencies":{"is-odd":"3.0.1"}}"#),
+        (
+            "packages/c/package.json",
+            r#"{"name":"@ws/c","dependencies":{"use-sync-external-store":"1.2.0","react":"18.2.0"}}"#,
+        ),
+        (lockfile, contents),
+        ("root.mjs", "import 'is-number'"),
+        ("packages/a/a.mjs", "import 'debug'"),
+        ("packages/a/link.mjs", "import '@ws/b'"),
+        ("packages/b/b.mjs", "import 'is-odd'"),
+        ("packages/c/c.mjs", "import 'use-sync-external-store'"),
+    ]);
+    let mut options = Options::new(repo.path()).base("main");
+    for (name, file) in [
+        ("root", "root.mjs"),
+        ("a", "packages/a/a.mjs"),
+        ("link", "packages/a/link.mjs"),
+        ("b", "packages/b/b.mjs"),
+        ("c", "packages/c/c.mjs"),
+    ] {
+        options = options.entry(name, Entry::Files(vec![file.into()]));
+    }
+    (repo, options)
+}
+
+/// The entries selected after `lockfile` becomes `contents`.
+fn selected(repo: &Repo, options: &Options, lockfile: &str, contents: &str) -> Vec<String> {
+    repo.write(&[(lockfile, contents)]);
+    analyze(options).unwrap().entries.into_iter().filter(EntryReport::is_hit).map(|e| e.name).collect()
+}
+
+const EVERY_ENTRY: [&str; 5] = ["root", "a", "link", "b", "c"];
+
+#[test]
+fn pnpm_v9_lockfile_selects_the_importers_reaching_a_changed_snapshot() {
+    let lock = "pnpm-lock.yaml";
+    let (repo, options) = workspace(lock, PNPM_V9);
+    let deep = PNPM_V9.replace("ms@2.1.2", "ms@2.1.3").replace("ms: 2.1.2", "ms: 2.1.3");
+    assert_eq!(selected(&repo, &options, lock, &deep), ["a"]);
+    let report = analyze(&options).unwrap();
+    assert_eq!(report.entries[1].chain, ["packages/a/a.mjs", "packages/a/package.json#debug", lock]);
+    assert_eq!(report.changed, [lock]);
+    // is-odd's dependency changes b, and a through its `link:` to b.
+    assert_eq!(selected(&repo, &options, lock, &PNPM_V9.replace("sha512-Wu1VHeILBK8K", "sha512-x")), ["link", "b"]);
+    // react's dependency reaches use-sync-external-store through its peer-suffixed snapshot.
+    assert_eq!(selected(&repo, &options, lock, &PNPM_V9.replace("sha512-lyuxPGr/Wfhr", "sha512-x")), ["c"]);
+    assert_eq!(selected(&repo, &options, lock, &PNPM_V9.replace("sha512-41Cifkg6e8Ty", "sha512-x")), ["root"]);
+}
+
+#[test]
+fn pnpm_v6_lockfile_selects_transitive_consumers() {
+    let lock = "pnpm-lock.yaml";
+    let (repo, options) = workspace(lock, PNPM_V6);
+    let deep = PNPM_V6.replace("/ms@2.1.2", "/ms@2.1.3").replace("ms: 2.1.2", "ms: 2.1.3");
+    assert_eq!(selected(&repo, &options, lock, &deep), ["a"]);
+    assert_eq!(selected(&repo, &options, lock, &PNPM_V6.replace("sha512-lyuxPGr/Wfhr", "sha512-x")), ["c"]);
+    // A package now reached only by dev dependencies is the same package.
+    assert!(
+        selected(&repo, &options, lock, &PNPM_V6.replace("    dev: false\n\n  /ms", "    dev: true\n\n  /ms"))
+            .is_empty()
+    );
+}
+
+#[test]
+fn pnpm_lockfiles_it_cannot_compare_select_every_entry() {
+    let lock = "pnpm-lock.yaml";
+    let (repo, options) = workspace(lock, PNPM_V9);
+    for broken in [
+        PNPM_V9.replace("lockfileVersion: '9.0'", "lockfileVersion: '5.4'"),
+        PNPM_V9.replace("importers:", "overrides:\n  ms: 2.1.3\n\nimporters:"),
+        PNPM_V9.replace("autoInstallPeers: true", "autoInstallPeers: false"),
+        PNPM_V9.replace("  ms@2.1.2: {}\n", ""),
+        PNPM_V9.replace("importers:", "importerz:"),
+        "lockfileVersion: '9.0'\nimporters: [".to_owned(),
+    ] {
+        assert_eq!(selected(&repo, &options, lock, &broken), EVERY_ENTRY);
+    }
+    // Moving from v6 to v9 rewrites every key.
+    assert_eq!(selected(&repo, &options, lock, PNPM_V6), EVERY_ENTRY);
+}
+
+#[test]
+fn a_pnpm_lockfile_in_a_subdirectory_maps_importers_relative_to_it() {
+    let lock = "app/pnpm-lock.yaml";
+    let single = "lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies:\n      react:\n        \
+                  specifier: 18.2.0\n        version: 18.2.0\n\npackages:\n\n  react@18.2.0:\n    \
+                  resolution: {integrity: sha512-a}\n\nsnapshots:\n\n  react@18.2.0: {}\n";
+    let manifest = r#"{"dependencies":{"react":"18.2.0"}}"#;
+    let repo = Repo::new(&[
+        ("package.json", manifest),
+        ("app/package.json", manifest),
+        (lock, single),
+        ("app/index.mjs", "import 'react'"),
+        ("index.mjs", "import 'react'"),
+    ]);
+    repo.write(&[(lock, &single.replace("sha512-a", "sha512-b"))]);
+    let options = Options::new(repo.path())
+        .entry("app", Entry::Files(vec!["app/index.mjs".into()]))
+        .entry("root", Entry::Files(vec!["index.mjs".into()]))
+        .base("main");
+    let report = analyze(&options).unwrap();
+    assert_eq!(report.entries[0].chain, ["app/index.mjs", "app/package.json#react", lock]);
+    assert!(!report.entries[1].is_hit());
+}
+
+#[test]
+fn yarn_berry_lockfile_selects_transitive_and_peer_consumers() {
+    let lock = "yarn.lock";
+    let (repo, options) = workspace(lock, YARN_BERRY);
+    assert_eq!(selected(&repo, &options, lock, &YARN_BERRY.replace("10c0/a437714e2f90", "10c0/x")), ["a"]);
+    let report = analyze(&options).unwrap();
+    assert_eq!(report.entries[1].chain, ["packages/a/a.mjs", "packages/a/package.json#debug", lock]);
+    assert_eq!(selected(&repo, &options, lock, &YARN_BERRY.replace("10c0/5da4c6840152", "10c0/x")), ["link", "b"]);
+    // use-sync-external-store's peer on react is resolved at install time: any locked react counts.
+    assert_eq!(selected(&repo, &options, lock, &YARN_BERRY.replace("10c0/655d11022098", "10c0/x")), ["c"]);
+    assert_eq!(selected(&repo, &options, lock, &YARN_BERRY.replace("10c0/b4686d0d3053", "10c0/x")), ["root"]);
+}
+
+#[test]
+fn yarn_lockfiles_it_cannot_compare_select_every_entry() {
+    let lock = "yarn.lock";
+    let (repo, options) = workspace(lock, YARN_BERRY);
+    let classic = "# THIS IS AN AUTOGENERATED FILE. DO NOT EDIT THIS FILE DIRECTLY.\n# yarn lockfile v1\n\n\nms@2.1.2:\n  version \"2.1.2\"\n";
+    for broken in [
+        YARN_BERRY.replace("cacheKey: 10c0", "cacheKey: 10c1"),
+        YARN_BERRY.replace("version: 8\n", "version: 99\n"),
+        YARN_BERRY.replace("    ms: \"npm:2.1.2\"\n", "    ms: \"npm:9.9.9\"\n"),
+        classic.to_owned(),
+    ] {
+        assert_eq!(selected(&repo, &options, lock, &broken), EVERY_ENTRY);
+    }
 }

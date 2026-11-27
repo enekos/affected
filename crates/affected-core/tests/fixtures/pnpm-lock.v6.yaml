@@ -1,0 +1,98 @@
+lockfileVersion: '6.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    devDependencies:
+      is-number:
+        specifier: 7.0.0
+        version: 7.0.0
+
+  packages/a:
+    dependencies:
+      '@ws/b':
+        specifier: workspace:*
+        version: link:../b
+      debug:
+        specifier: 4.3.4
+        version: 4.3.4
+
+  packages/b:
+    dependencies:
+      is-odd:
+        specifier: 3.0.1
+        version: 3.0.1
+
+  packages/c:
+    dependencies:
+      react:
+        specifier: 18.2.0
+        version: 18.2.0
+      use-sync-external-store:
+        specifier: 1.2.0
+        version: 1.2.0(react@18.2.0)
+
+packages:
+
+  /debug@4.3.4:
+    resolution: {integrity: sha512-PRWFHuSU3eDt}
+    engines: {node: '>=6.0'}
+    peerDependencies:
+      supports-color: '*'
+    peerDependenciesMeta:
+      supports-color:
+        optional: true
+    dependencies:
+      ms: 2.1.2
+    dev: false
+
+  /is-number@6.0.0:
+    resolution: {integrity: sha512-Wu1VHeILBK8K}
+    engines: {node: '>=0.10.0'}
+    dev: false
+
+  /is-number@7.0.0:
+    resolution: {integrity: sha512-41Cifkg6e8Ty}
+    engines: {node: '>=0.12.0'}
+    dev: true
+
+  /is-odd@3.0.1:
+    resolution: {integrity: sha512-CQpnWPrDwmP1}
+    engines: {node: '>=4'}
+    dependencies:
+      is-number: 6.0.0
+    dev: false
+
+  /js-tokens@4.0.0:
+    resolution: {integrity: sha512-RdJUflcE3cUz}
+    dev: false
+
+  /loose-envify@1.4.0:
+    resolution: {integrity: sha512-lyuxPGr/Wfhr}
+    hasBin: true
+    dependencies:
+      js-tokens: 4.0.0
+    dev: false
+
+  /ms@2.1.2:
+    resolution: {integrity: sha512-sGkPx+VjMtmA}
+    dev: false
+
+  /react@18.2.0:
+    resolution: {integrity: sha512-/3IjMdb2L9Qb}
+    engines: {node: '>=0.10.0'}
+    dependencies:
+      loose-envify: 1.4.0
+    dev: false
+
+  /use-sync-external-store@1.2.0(react@18.2.0):
+    resolution: {integrity: sha512-eEgnFxGQ1Ife}
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0
+    dependencies:
+      react: 18.2.0
+    dev: false

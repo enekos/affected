@@ -1,6 +1,6 @@
 {
   "name": "@enekos/affected",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Which TypeScript entry points does this diff reach? A Rust import graph over both sides of a git diff.",
   "keywords": [
     "typescript",
