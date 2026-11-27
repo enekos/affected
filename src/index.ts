@@ -3,6 +3,24 @@ import type * as Native from '../native.cjs'
 
 const native: typeof Native = createRequire(import.meta.url)('../native.cjs')
 
+export { compareShadow, shadowPlan, type ShadowPlan } from './shadow.ts'
+
+export interface TraceEdge {
+  readonly from: string
+  readonly to: string
+  readonly revision?: 'head' | 'base'
+}
+
+/** Convert @vercel/nft's reasons map. Set nft's base to the same directory as affected's cwd. */
+export function fromNftTrace(trace: { reasons: ReadonlyMap<string, { parents: ReadonlySet<string>; ignored?: boolean }> }, revision?: TraceEdge['revision']): TraceEdge[] {
+  const edges: TraceEdge[] = []
+  for (const [to, reason] of trace.reasons) {
+    if (reason.ignored) continue
+    for (const from of reason.parents) edges.push({ from, to, ...(revision && { revision }) })
+  }
+  return edges
+}
+
 /** A tsconfig path, or one or more source files resolved with their nearest tsconfig. */
 export type EntryPaths = string | readonly string[]
 
@@ -28,6 +46,9 @@ export interface AffectedOptions<Name extends string = string> {
   uncommitted?: boolean
   /** Follow `import type` edges. Defaults to `true`. */
   types?: boolean
+  /** Select uncertain entries on a nonempty diff. */
+  strict?: boolean
+  trace?: readonly TraceEdge[]
   /** Globs (relative to `cwd`) whose changes hit every entry, such as a lockfile or a shared config. */
   globals?: readonly string[]
 }
@@ -36,6 +57,11 @@ export interface Entry<Name extends string = string> {
   readonly name: Name
   /** Whether any changed file reaches this entry. */
   readonly hit: boolean
+  readonly status: 'affected' | 'unknown' | 'unaffected'
+  readonly diagnostics: readonly Native.NativeDiagnostic[]
+  readonly reason?: string
+  readonly revision?: string
+  readonly traceSteps: readonly string[]
   /** The changed files this entry reaches. */
   readonly hits: readonly string[]
   /** The shortest import chain from an entry root to a changed file. Empty when not hit. */
@@ -44,17 +70,24 @@ export interface Entry<Name extends string = string> {
   readonly files: readonly string[]
 }
 
+type StoredEntry = Pick<Native.NativeEntryReport, 'name' | 'hits' | 'files' | 'chain'> & Partial<Native.NativeEntryReport>
+
 export class Affected<Name extends string = string> {
   /** The changed files considered, relative to `cwd`. */
   readonly changed: readonly string[]
   readonly entries: readonly Entry<Name>[]
   readonly #byName: ReadonlyMap<Name, Entry<Name>>
 
-  constructor(report: Native.NativeReport) {
+  constructor(report: { changed: string[]; entries: StoredEntry[] }) {
     this.changed = report.changed
     this.entries = report.entries.map(entry => ({
       name: entry.name as Name,
-      hit: entry.hits.length > 0,
+      hit: entry.selected ?? entry.hits.length > 0,
+      status: entry.hits.length ? 'affected' : entry.diagnostics?.length ? 'unknown' : 'unaffected',
+      diagnostics: entry.diagnostics ?? [],
+      ...(entry.reason && { reason: entry.reason }),
+      ...(entry.revision && { revision: entry.revision }),
+      traceSteps: entry.traceSteps ?? [],
       hits: entry.hits,
       chain: entry.chain,
       files: entry.files,
@@ -77,7 +110,10 @@ export class Affected<Name extends string = string> {
   }
 
   /** The import chain explaining why `name` is hit, or `undefined` when it is not. */
-  why(name: Name): readonly string[] | undefined {
+  why(name: Name): readonly string[] | undefined
+  why(name: Name, options: { details: true }): Entry<Name>
+  why(name: Name, options?: { details: true }): readonly string[] | Entry<Name> | undefined {
+    if (options?.details) return this.entry(name)
     const { chain } = this.entry(name)
     return chain.length ? chain : undefined
   }
@@ -95,6 +131,10 @@ export class Affected<Name extends string = string> {
 }
 
 function describe(entry: Entry): string {
+  if (entry.status === 'unknown') {
+    const d = entry.diagnostics[0]
+    return `${entry.name}  unknown${entry.hit ? ' (selected)' : ''}  ${d?.file}: ${d?.expression} [${d?.revision}]`
+  }
   if (!entry.hit) return `${entry.name}  unaffected`
   const changed = entry.chain.at(-1)
   const via = entry.chain.slice(0, -1)
@@ -112,7 +152,7 @@ function toNativeEntry([name, input]: [string, EntryInput]): Native.NativeEntry 
   return { name, paths: toPaths(from), ...(inputs !== undefined && { inputs: [...inputs] }) }
 }
 
-function toNative({ cwd, entries, base, changed, uncommitted, types, globals }: AffectedOptions): Native.NativeOptions {
+function toNative({ cwd, entries, base, changed, uncommitted, types, globals, strict, trace }: AffectedOptions): Native.NativeOptions {
   return {
     cwd: cwd ?? process.cwd(),
     entries: Object.entries<EntryInput>(entries).map(toNativeEntry),
@@ -120,6 +160,8 @@ function toNative({ cwd, entries, base, changed, uncommitted, types, globals }: 
     ...(changed !== undefined && { changed: [...changed] }),
     ...(uncommitted !== undefined && { uncommitted }),
     ...(types !== undefined && { types }),
+    ...(strict !== undefined && { strict }),
+    ...(trace && { trace: [...trace] }),
     ...(globals !== undefined && { globals: [...globals] }),
   }
 }

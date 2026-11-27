@@ -11,7 +11,7 @@ use crate::imports::{self, Kind, Specifier};
 use crate::manifest::{self, Manifests};
 use crate::source::Source;
 use crate::tsconfig;
-use crate::{Entry, Error};
+use crate::{Entry, Error, TraceEdge};
 
 /// Parsed module requests per file. Files identical to the working tree share one entry
 /// across revisions; the rest are cached per revision.
@@ -30,6 +30,11 @@ impl ParseCache {
         }
         let parsed: Arc<[Specifier]> = match source.read_to_string(path) {
             Ok(text) if imports::is_parseable(path) => imports::extract(path, &text).into(),
+            Err(error) if imports::is_parseable(path) => Arc::from([Specifier {
+                request: format!("cannot read source: {error}").into(),
+                type_only: false,
+                kind: Kind::Unknown,
+            }]),
             _ => Arc::from([]),
         };
         map.lock().unwrap_or_else(PoisonError::into_inner).insert(path.to_path_buf(), Arc::clone(&parsed));
@@ -45,6 +50,9 @@ pub(crate) struct Graph {
     pub(crate) files: Vec<PathBuf>,
     parents: Vec<Option<usize>>,
     index: FxHashMap<PathBuf, usize>,
+    pub(crate) unknown: Vec<(PathBuf, String)>,
+    /// Target node of each trace edge chosen by the breadth-first walk.
+    pub(crate) traced: FxHashSet<PathBuf>,
 }
 
 impl Graph {
@@ -57,10 +65,6 @@ impl Graph {
         self.files.push(path);
         self.parents.push(parent);
         Some(id)
-    }
-
-    pub(crate) fn contains(&self, path: &Path) -> bool {
-        self.index.contains_key(path)
     }
 
     /// The import chain from an entry root to `path`, root first.
@@ -80,13 +84,22 @@ impl Graph {
 const PARALLEL_FRONTIER: usize = 64;
 
 const EXTENSIONS: [&str; 10] = [".ts", ".tsx", ".d.ts", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".json"];
-const CONDITIONS: [&str; 5] = ["types", "import", "require", "node", "default"];
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct Mode {
+    require: bool,
+    types: bool,
+}
 
-fn resolve_options(root: &Path, tsconfig: Option<&Path>, custom_conditions: &[String]) -> ResolveOptions {
+fn resolve_options(root: &Path, tsconfig: Option<&Path>, custom_conditions: &[String], mode: Mode) -> ResolveOptions {
     let owned = |items: &[&str]| items.iter().map(|item| (*item).to_owned()).collect::<Vec<_>>();
     let mut condition_names = custom_conditions.to_vec();
-    condition_names.extend(owned(&CONDITIONS));
-    ResolveOptions {
+    condition_names.extend(owned(&[if mode.require { "require" } else { "import" }, "node", "default"]));
+    if mode.types {
+        condition_names.push("types".to_owned());
+    }
+    let runtime = if mode.types && !mode.require { vec!["module", "main"] } else { vec!["main", "module"] };
+    let main_fields = if mode.types { ["types", "typings"].into_iter().chain(runtime).collect() } else { runtime };
+    let mut options = ResolveOptions {
         cwd: Some(root.to_path_buf()),
         tsconfig: Some(match tsconfig {
             Some(config_file) => TsconfigDiscovery::Manual(TsconfigOptions {
@@ -96,17 +109,25 @@ fn resolve_options(root: &Path, tsconfig: Option<&Path>, custom_conditions: &[St
             None => TsconfigDiscovery::Auto,
         }),
         condition_names,
-        extensions: owned(&EXTENSIONS),
+        extensions: EXTENSIONS.iter().filter(|s| mode.types || **s != ".d.ts").map(|s| (*s).into()).collect(),
         extension_alias: vec![
             (".js".into(), owned(&[".ts", ".tsx", ".d.ts", ".js"])),
             (".jsx".into(), owned(&[".tsx", ".jsx"])),
             (".mjs".into(), owned(&[".mts", ".d.mts", ".mjs"])),
             (".cjs".into(), owned(&[".cts", ".d.cts", ".cjs"])),
         ],
-        main_fields: owned(&["types", "typings", "module", "main"]),
+        main_fields: owned(&main_fields),
         builtin_modules: true,
         ..ResolveOptions::default()
+    };
+    if !mode.types {
+        for (extension, aliases) in &mut options.extension_alias {
+            // The emitted file is the runtime input when it exists alongside the TS source.
+            aliases.sort_by_key(|ext| ext != extension);
+            aliases.retain(|ext| !ext.starts_with(".d."));
+        }
     }
+    options
 }
 
 /// Files inside the repository and outside `node_modules` are followed; packages are not.
@@ -137,6 +158,21 @@ struct Context {
 /// A file under one resolution context.
 type EdgeKey = (Arc<Context>, PathBuf);
 
+#[derive(Default)]
+struct Dependencies {
+    files: Vec<PathBuf>,
+    unknown: Vec<String>,
+}
+
+#[derive(Default)]
+struct FileConfig {
+    paths: Vec<PathBuf>,
+    conditions: Vec<String>,
+    error: Option<String>,
+}
+
+type ResolverCache<S> = FxHashMap<(Context, Mode), Arc<ResolverGeneric<S>>>;
+
 /// Builds entry graphs over one revision. Resolvers and each file's resolved dependencies
 /// are kept for the whole analysis, so entries that share files resolve them once; both
 /// maps are bounded by the files and tsconfigs of the repository.
@@ -146,12 +182,26 @@ pub(crate) struct Walker<'c, S: Source> {
     types: bool,
     parses: &'c ParseCache,
     manifests: Manifests,
-    resolvers: Mutex<FxHashMap<Context, Arc<ResolverGeneric<S>>>>,
-    edges: Mutex<FxHashMap<EdgeKey, Arc<[PathBuf]>>>,
+    resolvers: Mutex<ResolverCache<S>>,
+    configs: Mutex<FxHashMap<PathBuf, Arc<FileConfig>>>,
+    trace: FxHashMap<PathBuf, Vec<PathBuf>>,
+    edges: Mutex<FxHashMap<EdgeKey, Arc<Dependencies>>>,
 }
 
 impl<'c, S: Source> Walker<'c, S> {
-    pub(crate) fn new(source: S, root: &Path, types: bool, parses: &'c ParseCache) -> Self {
+    pub(crate) fn new(
+        source: S,
+        root: &Path,
+        types: bool,
+        parses: &'c ParseCache,
+        trace: &[TraceEdge],
+        cwd: &Path,
+        revision: &str,
+    ) -> Self {
+        let mut traced: FxHashMap<PathBuf, Vec<PathBuf>> = FxHashMap::default();
+        for edge in trace.iter().filter(|e| e.revision.as_deref().is_none_or(|side| side == revision)) {
+            traced.entry(crate::absolute(cwd, &edge.from)).or_default().push(crate::absolute(cwd, &edge.to));
+        }
         Self {
             source,
             root: root.to_path_buf(),
@@ -159,6 +209,8 @@ impl<'c, S: Source> Walker<'c, S> {
             parses,
             manifests: Manifests::default(),
             resolvers: Mutex::default(),
+            configs: Mutex::default(),
+            trace: traced,
             edges: Mutex::default(),
         }
     }
@@ -167,12 +219,12 @@ impl<'c, S: Source> Walker<'c, S> {
         &self.source
     }
 
-    fn resolver(&self, context: &Context) -> Arc<ResolverGeneric<S>> {
+    fn resolver(&self, context: &Context, mode: Mode) -> Arc<ResolverGeneric<S>> {
         let mut resolvers = self.resolvers.lock().unwrap_or_else(PoisonError::into_inner);
-        let resolver = resolvers.entry(context.clone()).or_insert_with(|| {
+        let resolver = resolvers.entry((context.clone(), mode)).or_insert_with(|| {
             Arc::new(ResolverGeneric::new_with_file_system(
                 self.source.clone(),
-                resolve_options(&self.root, context.tsconfig.as_deref(), &context.conditions),
+                resolve_options(&self.root, context.tsconfig.as_deref(), &context.conditions, mode),
             ))
         });
         Arc::clone(resolver)
@@ -216,15 +268,26 @@ impl<'c, S: Source> Walker<'c, S> {
                 Some((*id, Arc::clone(context), self.dependencies(context, file)))
             };
             // Fork-join costs more than it saves on a small frontier, or once its files are cached.
-            let found: Vec<(usize, Arc<Context>, Arc<[PathBuf]>)> = if frontier.len() < PARALLEL_FRONTIER {
+            let found: Vec<_> = if frontier.len() < PARALLEL_FRONTIER {
                 frontier.iter().filter_map(visit).collect()
             } else {
                 frontier.par_iter().filter_map(visit).collect()
             };
             frontier.clear();
             for (parent, context, dependencies) in found {
-                for dependency in dependencies.iter() {
+                let Some(file) = graph.files.get(parent) else { continue };
+                for expr in &dependencies.unknown {
+                    graph.unknown.push((file.clone(), expr.clone()));
+                }
+                let traced = self.trace.get(file).cloned().unwrap_or_default();
+                for dependency in &dependencies.files {
                     if let Some(id) = graph.insert(dependency.clone(), Some(parent)) {
+                        frontier.push((id, Arc::clone(&context)));
+                    }
+                }
+                for dependency in traced {
+                    if let Some(id) = graph.insert(dependency.clone(), Some(parent)) {
+                        graph.traced.insert(dependency);
                         frontier.push((id, Arc::clone(&context)));
                     }
                 }
@@ -233,62 +296,150 @@ impl<'c, S: Source> Walker<'c, S> {
         Ok(graph)
     }
 
-    fn dependencies(&self, context: &Arc<Context>, file: &Path) -> Arc<[PathBuf]> {
+    fn dependencies(&self, context: &Arc<Context>, file: &Path) -> Arc<Dependencies> {
         let key = (Arc::clone(context), file.to_path_buf());
         if let Some(cached) = self.edges.lock().unwrap_or_else(PoisonError::into_inner).get(&key) {
             return Arc::clone(cached);
         }
-        let resolved: Arc<[PathBuf]> = self.resolve_all(context, file).into();
+        let resolved = Arc::new(self.resolve_all(context, file));
         self.edges.lock().unwrap_or_else(PoisonError::into_inner).insert(key, Arc::clone(&resolved));
         resolved
     }
 
-    fn resolve_all(&self, context: &Context, file: &Path) -> Vec<PathBuf> {
-        let specifiers = self.parses.specifiers(&self.source, file);
-        if specifiers.is_empty() {
-            return Vec::new();
-        }
-        let resolver = self.resolver(context);
-        let dir = file.parent().unwrap_or(&self.root);
-        let mut found = Vec::new();
-        for specifier in specifiers.iter().filter(|specifier| self.types || !specifier.type_only) {
-            match specifier.kind {
-                Kind::Module => self.resolve_module(&resolver, file, &specifier.request, &mut found),
-                Kind::File => self.resolve_path(file, &tsconfig::normalize(&dir.join(&*specifier.request)), &mut found),
-                Kind::Glob => self.resolve_glob(dir, &specifier.request, &mut found),
+    fn file_config(&self, dir: &Path) -> Arc<FileConfig> {
+        let mut configs = self.configs.lock().unwrap_or_else(PoisonError::into_inner);
+        Arc::clone(configs.entry(dir.into()).or_insert_with(|| {
+            let mut config = FileConfig::default();
+            if let Some(path) = dir
+                .ancestors()
+                .take_while(|p| p.starts_with(&self.root))
+                .map(|p| p.join("tsconfig.json"))
+                .find(|p| self.source.metadata(p).is_ok())
+            {
+                match tsconfig::resolution_configs(&self.source, &path) {
+                    Ok((paths, conditions)) => {
+                        config.paths = paths;
+                        config.conditions = conditions;
+                    }
+                    Err(error) => {
+                        config.paths.push(path);
+                        config.error = Some(error.to_string());
+                    }
+                }
             }
-        }
-        found.retain(|path| path != file);
-        found
+            Arc::new(config)
+        }))
     }
 
-    fn resolve_module(&self, resolver: &ResolverGeneric<S>, file: &Path, request: &str, found: &mut Vec<PathBuf>) {
+    fn resolve_all(&self, context: &Context, file: &Path) -> Dependencies {
+        let mut deps = Dependencies::default();
+        if !imports::is_parseable(file) || !is_followed(&self.root, file) {
+            return deps;
+        }
+        if self.source.symlink_metadata(file).is_ok_and(|m| m.is_symlink()) {
+            if let Ok(target) = self.source.canonicalize(file)
+                && is_followed(&self.root, &target)
+            {
+                deps.files.push(target);
+            }
+            return deps;
+        }
+        let dir = file.parent().unwrap_or(&self.root);
+        let local;
+        let context = if context.tsconfig.is_none() {
+            let config = self.file_config(dir);
+            deps.files.extend(config.paths.iter().cloned());
+            deps.unknown.extend(config.error.iter().cloned());
+            local = Context { tsconfig: config.paths.first().cloned(), conditions: config.conditions.clone() };
+            &local
+        } else {
+            context
+        };
+        for spec in self.parses.specifiers(&self.source, file).iter().filter(|s| self.types || !s.type_only) {
+            let request = &spec.request;
+            match &spec.kind {
+                Kind::Module | Kind::Require | Kind::DynamicImport => {
+                    let ext = file.extension().and_then(|s| s.to_str());
+                    let require =
+                        spec.kind == Kind::Require || (spec.kind == Kind::Module && matches!(ext, Some("cts" | "cjs")));
+                    // A TS static import can emit either module kind. Keep both runtime branches
+                    // for package specifiers when the file extension does not determine its emit.
+                    let ambiguous =
+                        spec.kind == Kind::Module && matches!(ext, Some("ts" | "tsx")) && !request.starts_with('.');
+                    let modes: &[bool] = if ambiguous { &[false, true] } else { std::slice::from_ref(&require) };
+                    let mut resolved = false;
+                    for &require in modes {
+                        if !spec.type_only {
+                            let resolver = self.resolver(context, Mode { require, types: false });
+                            resolved |= self.resolve_module(&resolver, file, request, &mut deps.files);
+                        }
+                        if self.types {
+                            let resolver = self.resolver(context, Mode { require, types: true });
+                            let typed = self.resolve_module(&resolver, file, request, &mut deps.files);
+                            if spec.type_only {
+                                resolved |= typed;
+                            }
+                        }
+                    }
+                    if !resolved {
+                        deps.unknown.push(format!("unresolved module {request}"));
+                    }
+                    // Retain the alias as a graph input when a tracked symlink itself changes.
+                    if request.starts_with('.') {
+                        let path = tsconfig::normalize(&dir.join(&**request));
+                        deps.files.extend(
+                            path.ancestors()
+                                .take_while(|p| p.starts_with(&self.root))
+                                .filter(|p| self.source.symlink_metadata(p).is_ok_and(|m| m.is_symlink()))
+                                .map(Path::to_owned),
+                        );
+                    }
+                }
+                Kind::Unknown => deps.unknown.push(request.to_string()),
+                Kind::File => self.resolve_path(file, &tsconfig::normalize(&dir.join(&**request)), &mut deps.files),
+                Kind::Glob => self.resolve_glob(dir, request, &[], &mut deps.files),
+                Kind::GlobExcept(excluded) => self.resolve_glob(dir, request, excluded, &mut deps.files),
+            }
+        }
+        deps.files.retain(|path| path != file);
+        deps.files.sort();
+        deps.files.dedup();
+        deps
+    }
+
+    fn resolve_module(
+        &self,
+        resolver: &ResolverGeneric<S>,
+        file: &Path,
+        request: &str,
+        found: &mut Vec<PathBuf>,
+    ) -> bool {
         let resolution = resolver.resolve_file(file, request);
         if let Err(ResolveError::Builtin { .. }) = resolution {
-            return;
+            return true;
         }
         let bare = package_name(request);
         if let Ok(resolution) = &resolution
             && is_followed(&self.root, resolution.path())
         {
             found.push(resolution.path().to_path_buf());
-            // A workspace package reached through `node_modules`: its manifest decides where the
-            // name points. Path aliases also land in the repository but never pass a manifest.
-            if bare.is_some()
+            // Package exports and package imports depend on the manifest selecting the implementation.
+            if (request.starts_with('#')
+                || resolution.package_json().is_some_and(|pkg| bare.is_some() && pkg.name() == bare))
                 && let Some(package) = resolution.package_json()
-                && !is_followed(&self.root, package.path())
                 && is_followed(&self.root, package.realpath())
             {
                 found.push(package.realpath().to_path_buf());
             }
-            return;
         }
         // An installed package, or one that does not resolve: the dependency its nearest manifest declares.
         if let Some(name) = bare
             && let Some(manifest) = self.manifests.declaring(&self.source, &self.root, file, name)
         {
             found.push(manifest::dependency_node(&manifest, name));
+            return true;
         }
+        resolution.is_ok()
     }
 
     /// A file, or every file below a directory. A directory holding the importing file is a
@@ -303,14 +454,17 @@ impl<'c, S: Source> Walker<'c, S> {
         }
     }
 
-    fn resolve_glob(&self, dir: &Path, pattern: &str, found: &mut Vec<PathBuf>) {
+    fn resolve_glob(&self, dir: &Path, pattern: &str, excluded: &[String], found: &mut Vec<PathBuf>) {
         let patterns = [pattern.to_owned()];
         let Ok(globs) = tsconfig::glob_set(dir, &patterns, false) else { return };
         let base = tsconfig::static_prefix(dir, &patterns);
         if !is_followed(&self.root, &base) {
             return;
         }
-        found.extend(self.source.files_under(&base).into_iter().filter(|path| globs.is_match(path)));
+        let Ok(exclude) = tsconfig::glob_set(dir, excluded, false) else { return };
+        found.extend(
+            self.source.files_under(&base).into_iter().filter(|path| globs.is_match(path) && !exclude.is_match(path)),
+        );
     }
 }
 

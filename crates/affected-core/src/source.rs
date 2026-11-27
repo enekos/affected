@@ -86,6 +86,7 @@ struct TreeIndex {
     root: PathBuf,
     blobs: FxHashMap<PathBuf, Box<str>>,
     dirs: FxHashSet<PathBuf>,
+    links: FxHashMap<PathBuf, PathBuf>,
     /// Paths whose working-tree contents differ from this revision; the rest are read from disk.
     differs: FxHashSet<PathBuf>,
     objects: Option<CatFile>,
@@ -97,8 +98,19 @@ impl GitTree {
         let mut blobs = FxHashMap::default();
         let mut dirs = FxHashSet::default();
         dirs.insert(git.root().to_path_buf());
-        for (path, object) in git.ls_tree(revision)? {
-            let absolute = git.root().join(&path);
+        let objects = git.cat_file();
+        let mut links = FxHashMap::default();
+        for blob in git.ls_tree(revision)? {
+            let absolute = git.root().join(&blob.path);
+            if blob.link {
+                let bytes =
+                    objects.read(&blob.oid).map_err(|source| crate::Error::Io { path: absolute.clone(), source })?;
+                let target = String::from_utf8(bytes).map_err(|e| crate::Error::Io {
+                    path: absolute.clone(),
+                    source: io::Error::new(io::ErrorKind::InvalidData, e),
+                })?;
+                links.insert(absolute.clone(), PathBuf::from(target));
+            }
             let mut parent = absolute.parent();
             while let Some(dir) = parent {
                 if !dirs.insert(dir.to_path_buf()) {
@@ -106,10 +118,28 @@ impl GitTree {
                 }
                 parent = dir.parent();
             }
-            blobs.insert(absolute, object);
+            blobs.insert(absolute, blob.oid);
         }
-        let objects = Some(git.cat_file());
-        Ok(Self(Arc::new(TreeIndex { root: git.root().to_path_buf(), blobs, dirs, differs, objects })))
+        let objects = Some(objects);
+        Ok(Self(Arc::new(TreeIndex { root: git.root().to_path_buf(), blobs, dirs, links, differs, objects })))
+    }
+
+    fn follow(&self, path: &Path) -> io::Result<PathBuf> {
+        let mut path = path.to_owned();
+        if self.0.links.is_empty() {
+            return Ok(path);
+        }
+        for _ in 0..40 {
+            let Some((link, target)) = path.ancestors().find_map(|part| self.0.links.get_key_value(part)) else {
+                return Ok(path);
+            };
+            let rest = path.strip_prefix(link).map_err(io::Error::other)?;
+            path = crate::tsconfig::normalize(&link.parent().unwrap_or(&self.0.root).join(target).join(rest));
+            if !path.starts_with(&self.0.root) {
+                return Err(Self::not_found(&path));
+            }
+        }
+        Err(io::Error::other("symlink cycle or excessive link depth"))
     }
 
     fn not_found(path: &Path) -> io::Error {
@@ -130,6 +160,7 @@ impl FileSystem for GitTree {
             root: PathBuf::new(),
             blobs: FxHashMap::default(),
             dirs: FxHashSet::default(),
+            links: FxHashMap::default(),
             differs: FxHashSet::default(),
             objects: None,
         }))
@@ -138,6 +169,8 @@ impl FileSystem for GitTree {
         if is_installed(path) {
             return fs::read(path);
         }
+        let owned = self.follow(path)?;
+        let path = owned.as_path();
         let object = self.0.blobs.get(path).ok_or_else(|| Self::not_found(path))?;
         if self.matches_disk(path) {
             return fs::read(path);
@@ -152,6 +185,8 @@ impl FileSystem for GitTree {
         if is_installed(path) {
             return Disk::new().metadata(path);
         }
+        let owned = self.follow(path)?;
+        let path = owned.as_path();
         if self.0.blobs.contains_key(path) {
             Ok(FileMetadata::new(true, false, false))
         } else if self.0.dirs.contains(path) {
@@ -164,19 +199,23 @@ impl FileSystem for GitTree {
         if is_installed(path) {
             return Disk::new().symlink_metadata(path);
         }
+        if self.0.links.contains_key(path) {
+            return Ok(FileMetadata::new(false, false, true));
+        }
         self.metadata(path)
     }
     fn read_link(&self, path: &Path) -> Result<PathBuf, ResolveError> {
         if is_installed(path) {
             return Disk::new().read_link(path);
         }
-        Err(ResolveError::from(Self::not_found(path)))
+        self.0.links.get(path).cloned().ok_or_else(|| ResolveError::from(Self::not_found(path)))
     }
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         if is_installed(path) {
             return Disk::new().canonicalize(path);
         }
-        self.metadata(path).map(|_| path.to_path_buf())
+        self.metadata(path)?;
+        self.follow(path)
     }
 }
 
@@ -194,6 +233,6 @@ impl Source for GitTree {
     }
 
     fn matches_disk(&self, path: &Path) -> bool {
-        !self.0.differs.contains(path)
+        !self.0.links.contains_key(path) && !self.0.differs.contains(path)
     }
 }

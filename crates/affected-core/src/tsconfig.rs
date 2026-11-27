@@ -64,13 +64,28 @@ struct Merged {
 }
 
 pub(crate) fn load<S: Source>(source: &S, path: &Path) -> Result<Tsconfig, Error> {
+    let (merged, configs, references) = config_chain(source, path)?;
+    roots(source, path, merged, configs, references)
+}
+
+type ConfigChain = (Merged, Vec<PathBuf>, Vec<PathBuf>);
+
+pub(crate) fn resolution_configs<S: Source>(source: &S, path: &Path) -> Result<(Vec<PathBuf>, Vec<String>), Error> {
+    let (merged, paths, _) = config_chain(source, path)?;
+    Ok((paths, merged.conditions.unwrap_or_default()))
+}
+
+fn config_chain<S: Source>(source: &S, path: &Path) -> Result<ConfigChain, Error> {
     let mut merged = Merged::default();
     let mut configs = Vec::new();
     let mut references = Vec::new();
     let mut pending = vec![path.to_path_buf()];
     while let Some(config) = pending.pop() {
-        if configs.len() >= MAX_EXTENDS_DEPTH || configs.contains(&config) {
-            break;
+        if configs.contains(&config) {
+            continue;
+        }
+        if configs.len() >= MAX_EXTENDS_DEPTH {
+            return Err(Error::Tsconfig { path: path.into(), message: "extends chain exceeds limit".into() });
         }
         let value = read(source, &config)?;
         let dir = config.parent().map(Path::to_path_buf).unwrap_or_default();
@@ -79,7 +94,7 @@ pub(crate) fn load<S: Source>(source: &S, path: &Path) -> Result<Tsconfig, Error
         if configs.len() == 1 {
             references = references_of(source, &value, &dir);
         }
-        for parent in extends(&value).iter().rev() {
+        for parent in &extends(&value) {
             if parent.starts_with('.') || Path::new(parent).is_absolute() {
                 let mut base = normalize(&dir.join(parent)).into_os_string();
                 if !base.to_string_lossy().ends_with(".json") {
@@ -92,6 +107,16 @@ pub(crate) fn load<S: Source>(source: &S, path: &Path) -> Result<Tsconfig, Error
         }
     }
 
+    Ok((merged, configs, references))
+}
+
+fn roots<S: Source>(
+    source: &S,
+    path: &Path,
+    merged: Merged,
+    configs: Vec<PathBuf>,
+    references: Vec<PathBuf>,
+) -> Result<Tsconfig, Error> {
     let config_dir = path.parent().unwrap_or(Path::new("/"));
     let allow_js = merged.allow_js.unwrap_or(false);
     let mut roots: Vec<PathBuf> = merged

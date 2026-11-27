@@ -13,6 +13,12 @@ export declare function analyze(options: NativeOptions): NativeReport
 
 export declare function analyzeAsync(options: NativeOptions): Promise<NativeReport>
 
+export interface NativeDiagnostic {
+  file: string
+  expression: string
+  revision: string
+}
+
 export interface NativeEntry {
   name: string
   paths: Array<string>
@@ -24,6 +30,11 @@ export interface NativeEntryReport {
   files: Array<string>
   hits: Array<string>
   chain: Array<string>
+  diagnostics: Array<NativeDiagnostic>
+  selected: boolean
+  reason?: string
+  revision?: string
+  traceSteps: Array<string>
 }
 
 export interface NativeOptions {
@@ -34,9 +45,17 @@ export interface NativeOptions {
   uncommitted?: boolean
   types?: boolean
   globals?: Array<string>
+  strict?: boolean
+  trace?: Array<NativeTraceEdge>
 }
 
 export interface NativeReport {
   changed: Array<string>
   entries: Array<NativeEntryReport>
+}
+
+export interface NativeTraceEdge {
+  from: string
+  to: string
+  revision?: string
 }

@@ -8,6 +8,7 @@
 mod git;
 mod graph;
 mod imports;
+mod lockfile;
 mod manifest;
 mod source;
 mod tsconfig;
@@ -19,7 +20,7 @@ use globset::GlobSet;
 use graph::{Graph, ParseCache, Walker};
 use oxc_resolver::FileSystem;
 use rayon::prelude::*;
-use source::{Disk, GitTree};
+use source::{Disk, GitTree, Source};
 
 /// Where an entry's import graph starts.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +52,21 @@ impl Entry {
     }
 }
 
+/// A traced dependency, relative to the caller's cwd. Without a revision it augments both graphs.
+#[derive(Debug, Clone)]
+pub struct TraceEdge {
+    pub from: PathBuf,
+    pub to: PathBuf,
+    pub revision: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diagnostic {
+    pub file: String,
+    pub expression: String,
+    pub revision: String,
+}
+
 /// What to analyse. Paths are relative to `cwd` unless absolute.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -65,6 +81,8 @@ pub struct Options {
     pub uncommitted: bool,
     /// Follow type-only imports.
     pub types: bool,
+    pub strict: bool,
+    pub trace: Vec<TraceEdge>,
     /// Globs, relative to `cwd`: a changed file matching one hits every entry.
     pub globals: Vec<String>,
     /// Per-entry globs, relative to `cwd`: a changed file matching one hits that entry.
@@ -82,6 +100,8 @@ impl Options {
             changed: None,
             uncommitted: true,
             types: true,
+            strict: false,
+            trace: Vec::new(),
             globals: Vec::new(),
             inputs: Vec::new(),
         }
@@ -141,12 +161,18 @@ pub struct EntryReport {
     pub hits: Vec<String>,
     /// The shortest import chain from an entry root to a changed file; empty when not hit.
     pub chain: Vec<String>,
+    pub diagnostics: Vec<Diagnostic>,
+    pub selected: bool,
+    /// Origin and revision of the shortest explanation.
+    pub reason: Option<String>,
+    pub revision: Option<String>,
+    pub trace_steps: Vec<String>,
 }
 
 impl EntryReport {
     #[must_use]
     pub fn is_hit(&self) -> bool {
-        !self.hits.is_empty()
+        self.selected
     }
 }
 
@@ -161,6 +187,8 @@ pub struct Report {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    #[error("invalid trace: {0}")]
+    Trace(String),
     #[error("pass `base` or `changed`")]
     NoChanges,
     #[error("`base` needs a git repository at {0}")]
@@ -207,7 +235,6 @@ pub fn analyze(options: &Options) -> Result<Report, Error> {
     changed.sort();
     changed.dedup();
 
-    let cache = ParseCache::default();
     let base_tree = match (&fork_point, &git) {
         (Some(commit), Some(git)) => {
             let differs = if options.changed.is_none() && options.uncommitted {
@@ -219,14 +246,45 @@ pub fn analyze(options: &Options) -> Result<Report, Error> {
         }
         _ => None,
     };
-    let head = Walker::new(Disk::new(), &root, options.types, &cache);
-    let base = base_tree.map(|tree| Walker::new(tree, &root, options.types, &cache));
-    for (_, entry) in &entries {
+    for edge in &options.trace {
+        if edge.revision.as_deref().is_some_and(|r| !matches!(r, "head" | "base"))
+            || [&edge.from, &edge.to].iter().any(|p| p.as_os_str().is_empty() || !absolute(&cwd, p).starts_with(&root))
+        {
+            return Err(Error::Trace(format!("invalid edge {} -> {}", edge.from.display(), edge.to.display())));
+        }
+    }
+    if !options.uncommitted
+        && let (Some(_), Some(git)) = (&fork_point, &git)
+    {
+        let dirty = git.changed_since("HEAD", true)?;
+        let tree = GitTree::load(git, "HEAD", dirty.into_iter().collect())?;
+        return analyze_trees(options, &cwd, &root, &entries, changed, tree, base_tree);
+    }
+    analyze_trees(options, &cwd, &root, &entries, changed, Disk::new(), base_tree)
+}
+
+fn analyze_trees(
+    options: &Options,
+    cwd: &Path,
+    root: &Path,
+    entries: &[(&str, Entry)],
+    mut changed: Vec<PathBuf>,
+    tree: impl Source,
+    base_tree: Option<GitTree>,
+) -> Result<Report, Error> {
+    let head_cache = ParseCache::default();
+    let base_cache = ParseCache::default();
+    // Two committed snapshots can both differ from disk *and* from one another.
+    let cache = if options.uncommitted { &head_cache } else { &base_cache };
+    let head = Walker::new(tree, root, options.types, &head_cache, &options.trace, cwd, "head");
+    let base = base_tree.map(|tree| Walker::new(tree, root, options.types, cache, &options.trace, cwd, "base"));
+    for (_, entry) in entries {
         ensure_exists(entry, head.source(), base.as_ref().map(Walker::source))?;
     }
+    let locks = lockfile::compare(head.source(), base.as_ref().map(Walker::source), &changed);
     changed.extend(graph::changed_dependencies(head.source(), base.as_ref().map(Walker::source), &changed));
 
-    let globals = globs(&cwd, &options.globals)?;
+    let globals = globs(cwd, &options.globals)?;
     // Entries share the walkers' caches, so running them side by side also spreads the
     // resolution work; `collect` keeps declaration order.
     let reports = entries
@@ -235,18 +293,18 @@ pub fn analyze(options: &Options) -> Result<Report, Error> {
             let (head_graph, base_graph) =
                 rayon::join(|| head.build(entry), || base.as_ref().map(|base| base.build(entry)).transpose());
             let inputs = options.inputs.iter().filter(|(entry, _)| entry == name).flat_map(|(_, globs)| globs);
-            let inputs = globs(&cwd, &inputs.cloned().collect::<Vec<_>>())?;
+            let inputs = globs(cwd, &inputs.cloned().collect::<Vec<_>>())?;
             let matched = |path: &PathBuf| globals.is_match(path) || inputs.is_match(path);
-            Ok(report(name, &cwd, &changed, &head_graph?, base_graph?.as_ref(), matched))
+            Ok(report(name, cwd, &changed, &head_graph?, base_graph?.as_ref(), matched, &locks, options.strict))
         })
         .collect::<Result<Vec<_>, Error>>()?;
     let changed = changed.iter().filter(|path| !manifest::is_dependency_node(path));
-    Ok(Report { changed: changed.map(|path| relative(&cwd, path)).collect(), entries: reports })
+    Ok(Report { changed: changed.map(|path| relative(cwd, path)).collect(), entries: reports })
 }
 
 /// Every entry path must exist on at least one side of the diff: an entry the change adds
 /// or deletes is fine, a typo is not.
-fn ensure_exists(entry: &Entry, head: &Disk, base: Option<&GitTree>) -> Result<(), Error> {
+fn ensure_exists(entry: &Entry, head: &impl Source, base: Option<&GitTree>) -> Result<(), Error> {
     let exists = |path: &Path| head.metadata(path).is_ok() || base.is_some_and(|base| base.metadata(path).is_ok());
     let paths = match entry {
         Entry::Tsconfig(path) => std::slice::from_ref(path),
@@ -271,6 +329,7 @@ fn globs(cwd: &Path, patterns: &[String]) -> Result<GlobSet, Error> {
     builder.build().map_err(|error| Error::Glob { glob: patterns.join(", "), message: error.to_string() })
 }
 
+#[expect(clippy::too_many_arguments, reason = "report joins two revision graphs with three change sources")]
 fn report(
     name: &str,
     cwd: &Path,
@@ -278,27 +337,73 @@ fn report(
     head: &Graph,
     base: Option<&Graph>,
     matched: impl Fn(&PathBuf) -> bool,
+    locks: &lockfile::Impact,
+    strict: bool,
 ) -> EntryReport {
-    let graphs: Vec<&Graph> = std::iter::once(head).chain(base).collect();
-    let mut files: Vec<&PathBuf> =
-        graphs.iter().flat_map(|graph| graph.files.iter()).filter(|path| !manifest::is_dependency_node(path)).collect();
-    files.sort();
-    files.dedup();
-    let hits: Vec<&PathBuf> =
-        changed.iter().filter(|path| matched(path) || graphs.iter().any(|graph| graph.contains(path))).collect();
-    let chain = hits
-        .iter()
-        .flat_map(|path| {
-            let input = matched(path).then(|| vec![(*path).clone()]);
-            graphs.iter().filter_map(|graph| graph.chain(path)).chain(input)
-        })
-        .min_by_key(Vec::len)
-        .unwrap_or_default();
+    use std::collections::BTreeSet;
+    let graphs = [Some(("head", head)), base.map(|g| ("base", g))];
+    let mut files = BTreeSet::new();
+    let mut hits = BTreeSet::new();
+    let mut diagnostics = Vec::new();
+    type Explanation = (Vec<PathBuf>, &'static str, Option<&'static str>, Vec<String>);
+    let mut explanation: Option<Explanation> = None;
+    let mut consider = |chain: Vec<PathBuf>, reason, revision, steps| {
+        if explanation.as_ref().is_none_or(|(old, ..)| chain.len() < old.len()) {
+            explanation = Some((chain, reason, revision, steps));
+        }
+    };
+    for path in changed {
+        if matched(path) || locks.broad.contains(path) {
+            hits.insert(relative(cwd, path));
+            consider(vec![path.clone()], if matched(path) { "input" } else { "lockfile" }, None, vec![]);
+        }
+    }
+    for (side, graph) in graphs.into_iter().flatten() {
+        files.extend(graph.files.iter().filter(|p| !manifest::is_dependency_node(p)).map(|p| relative(cwd, p)));
+        for (file, expression) in &graph.unknown {
+            diagnostics.push(Diagnostic {
+                file: relative(cwd, file),
+                expression: expression.clone(),
+                revision: side.into(),
+            });
+        }
+        for path in changed {
+            if let Some(chain) = graph.chain(path) {
+                let steps: Vec<_> =
+                    chain.iter().filter(|p| graph.traced.contains(*p)).map(|p| relative(cwd, p)).collect();
+                hits.insert(relative(cwd, path));
+                consider(chain, if steps.is_empty() { "graph" } else { "trace" }, Some(side), steps);
+            }
+        }
+        for (node, lock) in &locks.dependencies {
+            if let Some(mut chain) = graph.chain(node) {
+                hits.insert(relative(cwd, lock));
+                chain.push(lock.clone());
+                consider(chain, "lockfile", Some(side), vec![]);
+            }
+        }
+    }
+    diagnostics.sort_by(|a, b| (&a.file, &a.expression, &a.revision).cmp(&(&b.file, &b.expression, &b.revision)));
+    diagnostics.dedup();
+    let fallback = strict && !changed.is_empty() && hits.is_empty() && !diagnostics.is_empty();
+    let selected = !hits.is_empty() || fallback;
+    let (chain, reason, revision, trace_steps) = match explanation {
+        Some((paths, reason, revision, steps)) => {
+            (paths.iter().map(|p| relative(cwd, p)).collect(), Some(reason.into()), revision.map(str::to_owned), steps)
+        }
+        None if fallback => (vec![], Some("unknown".into()), None, vec![]),
+        None => (vec![], None, None, vec![]),
+    };
     EntryReport {
-        name: name.to_owned(),
-        files: files.iter().map(|path| relative(cwd, path)).collect(),
-        hits: hits.iter().map(|path| relative(cwd, path)).collect(),
-        chain: chain.iter().map(|path| relative(cwd, path)).collect(),
+        name: name.into(),
+        files: files.into_iter().collect(),
+        hits: hits.into_iter().collect(),
+        chain,
+        selected,
+        diagnostics,
+        reason,
+        revision,
+        trace_steps,
     }
 }
 

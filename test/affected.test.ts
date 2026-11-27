@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test, { type TestContext } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { affected, affectedAsync, detectBase } from '../src/index.ts'
+import { affected, affectedAsync, detectBase, fromNftTrace, shadowPlan, compareShadow } from '../src/index.ts'
 
 const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url))
 
@@ -123,7 +123,7 @@ test("base 'auto' follows the CI's pull request target", () => {
 
 test('the CLI lists hit names and writes GitHub outputs', t => {
   const { root, write } = repo(t, app)
-  write({ 'web/view.ts': 'export const v = 1', 'pnpm-lock.yaml': 'v2' })
+  write({ 'web/view.ts': 'export const v = 1', 'global.yml': 'v2' })
   const output = join(root, 'github-output')
   const run = (...args: string[]) =>
     spawnSync(process.execPath, [cli, ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, GITHUB_OUTPUT: output } })
@@ -132,10 +132,52 @@ test('the CLI lists hit names and writes GitHub outputs', t => {
   assert.equal(names.stdout, 'web\n')
   assert.equal(readFileSync(output, 'utf8'), 'affected=["web"]\nany=true\n')
 
-  const global = run('-e', 'jobs=jobs/tsconfig.json', '-b', 'main', '-g', 'pnpm-lock.yaml', '--names')
+  const global = run('-e', 'jobs=jobs/tsconfig.json', '-b', 'main', '-g', 'global.yml', '--names')
   assert.equal(global.stdout, 'jobs\n')
 
   const input = run('-e', 'jobs=jobs/tsconfig.json', '-b', 'main', '-i', 'jobs=web/**', '--names')
   assert.equal(input.stdout, 'jobs\n')
   assert.match(run('-e', 'jobs=jobs/tsconfig.json', '-b', 'main', '-i', 'nope=x').stderr, /unknown entry "nope"/)
+})
+
+test('strict selection and revision-specific trace explanations', async t => {
+  const { root, write } = repo(t, { 'entry.ts': 'export const load = (id: string) => import(id)', 'real.ts': 'export {}', 'other.ts': '' })
+  write({ 'real.ts': 'export const changed = 1' })
+  const options = { cwd: root, entries: { app: 'entry.ts', other: 'other.ts' }, base: 'main' }
+  const advisory = affected(options)
+  assert.deepEqual(advisory.hit, [])
+  assert.equal(advisory.entry('app').status, 'unknown')
+  assert.ok(advisory.entry('app').diagnostics.some(d => d.file === 'entry.ts' && d.expression === 'import(id)' && d.revision === 'head'))
+  assert.deepEqual(affected({ ...options, strict: true }).hit, ['app'])
+  assert.deepEqual(affected({ ...options, strict: true, changed: [] }).hit, [])
+  const trace = fromNftTrace({ reasons: new Map([['real.ts', { parents: new Set(['entry.ts']) }]]) }, 'base')
+  const result = await affectedAsync({ ...options, trace })
+  assert.deepEqual(result.why('app'), ['entry.ts', 'real.ts'])
+  const why = result.why('app', { details: true })
+  assert.equal(why.reason, 'trace')
+  assert.equal(why.revision, 'base')
+  assert.deepEqual(why.traceSteps, ['real.ts'])
+  assert.deepEqual(affected({ cwd: root, entries: options.entries, changed: ['real.ts'], trace }).hit, [])
+})
+
+test('shadow comparison finds skipped failures and reports incomplete full runs', t => {
+  const { root } = repo(t, { 'a.test.ts': 'import "./leaf"', 'b.test.ts': '', 'leaf.ts': '' })
+  const entries = { alpha: 'a.test.ts', beta: ['b.test.ts'] }
+  const plan = shadowPlan(affected({ cwd: root, entries, changed: ['leaf.ts'] }), entries, root)
+  const full = { success: false, testResults: [
+    { name: join(root, 'a.test.ts'), status: 'passed' },
+    { name: join(root, 'b.test.ts'), status: 'failed' },
+  ] }
+  assert.deepEqual(compareShadow(plan, full, root), { candidates: 2, selected: 1, executedSuites: 2,
+    failed: ['b.test.ts'], missed: ['b.test.ts'], missingResults: [] })
+  assert.deepEqual(compareShadow(plan, { testResults: full.testResults.slice(1) }, root).missingResults, ['a.test.ts'])
+  assert.throws(() => compareShadow(plan, { success: false, testResults: full.testResults.slice(0, 1) }, root), /without identifying/)
+  assert.throws(() => compareShadow({}, full, root), /Invalid shadow plan/)
+  const run = (...args: string[]) => spawnSync(process.execPath, [cli, ...args], { cwd: root, encoding: 'utf8' })
+  assert.equal(run('-e','a=a.test.ts','-e','b=b.test.ts','-c','leaf.ts','--shadow-out','plan.json').status, 0)
+  writeFileSync(join(root,'results.json'),JSON.stringify(full))
+  const compare = run('--compare-shadow','plan.json','--results','results.json')
+  assert.equal(compare.status, 1)
+  assert.deepEqual(JSON.parse(compare.stdout).missed, ['b.test.ts'])
+  assert.equal(run('-e','a=a.test.ts','--misspelled').status, 2)
 })

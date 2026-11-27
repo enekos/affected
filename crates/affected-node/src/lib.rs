@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use affected_core::{Entry, Options, Report};
+use affected_core::{Entry, Options, Report, TraceEdge};
 use napi::bindgen_prelude::{AsyncTask, Env, Error, Result, Status, Task};
 use napi_derive::napi;
 
@@ -16,6 +16,22 @@ pub struct NativeEntry {
 
 #[napi(object)]
 #[derive(Debug)]
+pub struct NativeTraceEdge {
+    pub from: String,
+    pub to: String,
+    pub revision: Option<String>,
+}
+
+#[napi(object)]
+#[derive(Debug)]
+pub struct NativeDiagnostic {
+    pub file: String,
+    pub expression: String,
+    pub revision: String,
+}
+
+#[napi(object)]
+#[derive(Debug)]
 pub struct NativeOptions {
     pub cwd: String,
     pub entries: Vec<NativeEntry>,
@@ -24,6 +40,8 @@ pub struct NativeOptions {
     pub uncommitted: Option<bool>,
     pub types: Option<bool>,
     pub globals: Option<Vec<String>>,
+    pub strict: Option<bool>,
+    pub trace: Option<Vec<NativeTraceEdge>>,
 }
 
 #[napi(object)]
@@ -33,6 +51,11 @@ pub struct NativeEntryReport {
     pub files: Vec<String>,
     pub hits: Vec<String>,
     pub chain: Vec<String>,
+    pub diagnostics: Vec<NativeDiagnostic>,
+    pub selected: bool,
+    pub reason: Option<String>,
+    pub revision: Option<String>,
+    pub trace_steps: Vec<String>,
 }
 
 #[napi(object)]
@@ -48,6 +71,13 @@ impl From<NativeOptions> for Options {
             .uncommitted(native.uncommitted.unwrap_or(true))
             .types(native.types.unwrap_or(true))
             .globals(native.globals.unwrap_or_default());
+        options.strict = native.strict.unwrap_or(false);
+        options.trace = native
+            .trace
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| TraceEdge { from: e.from.into(), to: e.to.into(), revision: e.revision })
+            .collect();
         for entry in native.entries {
             if let Some(inputs) = entry.inputs {
                 options = options.inputs(entry.name.clone(), inputs);
@@ -77,6 +107,15 @@ impl From<Report> for NativeReport {
                     files: entry.files,
                     hits: entry.hits,
                     chain: entry.chain,
+                    selected: entry.selected,
+                    reason: entry.reason,
+                    revision: entry.revision,
+                    trace_steps: entry.trace_steps,
+                    diagnostics: entry
+                        .diagnostics
+                        .into_iter()
+                        .map(|d| NativeDiagnostic { file: d.file, expression: d.expression, revision: d.revision })
+                        .collect(),
                 })
                 .collect(),
         }
