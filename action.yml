@@ -1,0 +1,73 @@
+name: affected tests
+description: Run only the tests a change can reach. Import graphs over both sides of the diff, with Vitest or Jest.
+author: Eneko Sarasola
+branding:
+  icon: git-branch
+  color: blue
+
+inputs:
+  run:
+    description: >-
+      Command to run with the selection, split on whitespace. `{files}` expands to the hit test files
+      and `{names}` to the hit entry names; without either the files go last. An empty selection
+      skips it, and a failed analysis runs it on everything. Leave empty to only set outputs.
+    default: ''
+  entries:
+    description: >-
+      `tests` asks Vitest or Jest for the test files. `config` uses affected.config.* or `--entry` flags in `args`.
+    default: tests
+  args:
+    description: 'Extra CLI arguments, split on whitespace, such as `--runner jest` or `-g .github/**`.'
+    default: ''
+  base:
+    description: 'Ref to compare against. `auto` uses the pull request target branch, or the previous commit on a push.'
+    default: auto
+  working-directory:
+    description: Directory to run in.
+    default: .
+  summary:
+    description: Write a job summary of what was hit and why.
+    default: 'true'
+  fetch:
+    description: Fetch the base branch, and history until the fork point, when the checkout is shallow.
+    default: 'true'
+  version:
+    description: Version of @enekos/affected. Defaults to the version this action was released with.
+    default: ''
+
+outputs:
+  affected:
+    description: 'JSON array of hit entry names: test file paths with `entries: tests`.'
+    value: ${{ steps.affected.outputs.affected }}
+  any:
+    description: '`true` when anything is hit.'
+    value: ${{ steps.affected.outputs.any }}
+  files:
+    description: JSON array of the hit test files.
+    value: ${{ steps.affected.outputs.files }}
+  matrix:
+    description: '`{"entry": [...]}` for `strategy.matrix`.'
+    value: ${{ steps.affected.outputs.matrix }}
+  count:
+    description: Number of hit entries.
+    value: ${{ steps.affected.outputs.count }}
+  total:
+    description: Number of entries checked.
+    value: ${{ steps.affected.outputs.total }}
+
+runs:
+  using: composite
+  steps:
+    - id: affected
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        INPUT_RUN: ${{ inputs.run }}
+        INPUT_ENTRIES: ${{ inputs.entries }}
+        INPUT_ARGS: ${{ inputs.args }}
+        INPUT_BASE: ${{ inputs.base }}
+        INPUT_SUMMARY: ${{ inputs.summary }}
+        INPUT_FETCH: ${{ inputs.fetch }}
+        INPUT_VERSION: ${{ inputs.version }}
+        EVENT_BEFORE: ${{ github.event.before }}
+      run: bash "$GITHUB_ACTION_PATH/action/run.sh"
