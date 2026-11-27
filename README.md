@@ -55,6 +55,10 @@ pnpm add -D @enekos/affected     # npm i -D @enekos/affected · yarn add -D @ene
 Prebuilt for macOS (arm64, x64), Linux (x64, arm64; glibc and musl) and Windows x64. Node ≥ 20. No
 postinstall scripts.
 
+No Node (Bun, Deno, other CI images)? Use the standalone `affected` binary from the
+[GitHub releases](https://github.com/enekos/affected/releases) or `cargo binstall`; see
+[Install without Node](https://enekos.github.io/affected/reference/cli.html#install-without-node).
+
 ## CLI
 
 ```sh
