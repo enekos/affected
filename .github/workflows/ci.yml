@@ -93,6 +93,72 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  binary:
+    name: binary (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { host: ubuntu-latest, target: x86_64-unknown-linux-musl, zig: true, smoke: true }
+          - { host: ubuntu-latest, target: aarch64-unknown-linux-musl, zig: true }
+          - { host: macos-latest, target: aarch64-apple-darwin, smoke: true }
+          - { host: macos-latest, target: x86_64-apple-darwin }
+          - { host: windows-latest, target: x86_64-pc-windows-msvc, smoke: true }
+    runs-on: ${{ matrix.host }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Static binaries: musl links statically by default; this also drops the MSVC runtime DLLs.
+      RUSTFLAGS: ${{ contains(matrix.target, 'windows') && '-C target-feature=+crt-static' || '' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: binary-${{ matrix.target }}
+      - uses: mlugg/setup-zig@v2
+        if: matrix.zig
+      - uses: taiki-e/install-action@v2
+        if: matrix.zig
+        with:
+          tool: cargo-zigbuild
+      - run: cargo ${{ matrix.zig && 'zigbuild' || 'build' }} --release --locked -p affected-ts --target ${{ matrix.target }}
+      - name: Package
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          name="affected-$TARGET"
+          exe=""
+          case "$TARGET" in *windows*) exe=.exe ;; esac
+          mkdir -p "package/$name" dist-bin
+          cp "target/$TARGET/release/affected$exe" LICENSE README.md "package/$name/"
+          cd "package/$name"
+          if [ -n "$exe" ]; then 7z a -tzip "../../dist-bin/$name.zip" . >/dev/null; else tar -czf "../../dist-bin/$name.tar.gz" ./*; fi
+          cd ../../dist-bin
+          for file in ./*; do
+            file="${file#./}"
+            if command -v sha256sum >/dev/null; then sha256sum "$file"; else shasum -a 256 "$file"; fi > "$file.sha256"
+          done
+          ls -l
+      - name: Smoke test
+        if: matrix.smoke
+        run: |
+          bin="target/${{ matrix.target }}/release/affected"
+          "$bin" --version
+          "$bin" -e core=crates/affected-core/src/lib.rs -c crates/affected-core/src/git.rs --exit-code
+      - name: Static on Linux
+        if: matrix.zig
+        run: file "target/${{ matrix.target }}/release/affected" | tee /dev/stderr | grep -q 'statically linked'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: binary-${{ matrix.target }}
+          path: dist-bin/*
+          if-no-files-found: error
+          retention-days: 7
+
   test:
     name: test (${{ matrix.target }}, node ${{ matrix.node }})
     needs: build
