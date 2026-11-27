@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use affected_core::{Entry, EntryReport, Options, analyze};
+use affected_core::{Entry, EntryReport, Options, analyze, expand};
 use tempfile::TempDir;
 
 struct Repo {
@@ -443,4 +443,27 @@ fn npm_lockfile_follows_transitive_consumers_and_falls_back_without_a_comparable
     assert!(
         analyze(&options.clone().changed(vec!["yarn.lock".into()])).unwrap().entries.iter().all(EntryReport::is_hit)
     );
+}
+
+#[test]
+fn expand_lists_unignored_files_relative_to_cwd() {
+    let repo = Repo::new(&[
+        (".gitignore", "dist/\n"),
+        ("pkg/src/a.test.ts", ""),
+        ("pkg/src/b.test.ts", ""),
+        ("pkg/dist/a.test.ts", ""),
+        ("other/c.test.ts", ""),
+    ]);
+    repo.write(&[("pkg/src/new.test.ts", "")]);
+    let globs = |patterns: &[&str]| patterns.iter().map(|p| (*p).to_owned()).collect::<Vec<_>>();
+    let cwd = repo.path().join("pkg");
+    assert_eq!(
+        expand(&cwd, &globs(&["**/*.test.ts"]), &[]).unwrap(),
+        ["src/a.test.ts", "src/b.test.ts", "src/new.test.ts"]
+    );
+    assert_eq!(
+        expand(&cwd, &globs(&["src/*.ts"]), &globs(&["src/b.*"])).unwrap(),
+        ["src/a.test.ts", "src/new.test.ts"]
+    );
+    assert!(expand(&cwd, &globs(&["["]), &[]).is_err());
 }

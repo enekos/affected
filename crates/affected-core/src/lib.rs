@@ -316,6 +316,27 @@ fn ensure_exists(entry: &Entry, head: &impl Source, base: Option<&GitTree>) -> R
     }
 }
 
+/// Files matching any `include` glob and no `exclude` glob, relative to `cwd`, sorted.
+///
+/// Globs are relative to `cwd`. Inside a git work tree the candidates are tracked and untracked
+/// files git does not ignore; elsewhere every file under `cwd` outside `node_modules` and `.git`.
+pub fn expand(cwd: &Path, include: &[String], exclude: &[String]) -> Result<Vec<String>, Error> {
+    let cwd = dunce::canonicalize(cwd).map_err(|source| Error::Io { path: cwd.to_path_buf(), source })?;
+    let candidates = match Git::discover(&cwd) {
+        Some(git) => git.files(&cwd)?,
+        None => Disk::new().files_under(&cwd),
+    };
+    let include = globs(&cwd, include)?;
+    let exclude = globs(&cwd, exclude)?;
+    let mut matched: Vec<String> = candidates
+        .iter()
+        .filter(|path| include.is_match(path) && !exclude.is_match(path))
+        .map(|path| relative(&cwd, path))
+        .collect();
+    matched.sort();
+    Ok(matched)
+}
+
 fn globs(cwd: &Path, patterns: &[String]) -> Result<GlobSet, Error> {
     let mut builder = globset::GlobSetBuilder::new();
     for pattern in patterns {

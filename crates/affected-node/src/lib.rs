@@ -131,6 +131,13 @@ pub fn analyze(options: NativeOptions) -> Result<NativeReport> {
     run(&options.into()).map(NativeReport::from)
 }
 
+/// Files matching any `include` glob and no `exclude` glob, relative to `cwd`, sorted.
+#[napi]
+pub fn expand(cwd: String, include: Vec<String>, exclude: Vec<String>) -> Result<Vec<String>> {
+    affected_core::expand(cwd.as_ref(), &include, &exclude)
+        .map_err(|error| Error::new(Status::GenericFailure, error.to_string()))
+}
+
 #[derive(Debug)]
 pub struct Analysis(Options);
 

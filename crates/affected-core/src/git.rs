@@ -82,6 +82,26 @@ impl Git {
         Ok(changed)
     }
 
+    /// Tracked and untracked files under `dir` that git does not ignore, as absolute paths.
+    pub(crate) fn files(&self, dir: &Path) -> Result<Vec<PathBuf>, Error> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--full-name", "--", "."])
+            .output()
+            .map_err(|source| Error::Io { path: PathBuf::from("git"), source })?;
+        if !output.status.success() {
+            return Err(Error::Git {
+                command: "ls-files".to_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            });
+        }
+        let mut files: Vec<PathBuf> = Self::lines(&output.stdout).map(|line| self.root.join(line)).collect();
+        files.sort();
+        files.dedup();
+        Ok(files)
+    }
+
     /// Every blob in `revision` as (repository-relative path, object id).
     pub(crate) fn ls_tree(&self, revision: &str) -> Result<Vec<TreeBlob>, Error> {
         let output = self.run(&["ls-tree", "-r", "-z", "--full-tree", revision])?;
