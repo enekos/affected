@@ -61,7 +61,7 @@ overrides) select every test.
 npx affected tests --runner playwright -b origin/main -- playwright test --test-list {test-list}
 ```
 
-Each entry identifies a project and a spec file. A temporary Playwright test list preserves that pair when multiple projects share the same file. Playwright runs its usual prerequisites. To pass the plan to an existing scheduler, use `--names` for Playwright test-list lines or `--format paths` for a deduplicated file list. Pass the same config to discovery and execution when using a custom config. Test-list execution requires a Playwright version with `--test-list`.
+Each entry identifies a project and a spec file. A temporary Playwright test list preserves that pair when multiple projects share the same file. Playwright runs its usual prerequisites. If a helper declares tests outside their collected spec file, Playwright cannot reliably express that file in a test list. The command falls back to the full run and a plan-only invocation reports the reason. To pass the plan to an existing scheduler, use `--names` for Playwright test-list lines or `--format paths` for a deduplicated file list. Pass the same config to discovery and execution when using a custom config. Test-list execution requires a Playwright version with `--test-list`.
 
 The config and its imports, global setup/teardown and prerequisite project files are roots for the relevant entries. Deleted scripts in a prerequisite project's directory conservatively select its dependents. Playwright discovery defaults to runtime imports. Use `--types` to include type-only imports. For browser or service code reached only over the network, supply traced edges or configured inputs.
 

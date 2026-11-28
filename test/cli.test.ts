@@ -302,4 +302,16 @@ test('real Playwright collection preserves project identity, transitive setup an
   assert.equal(deleted.status, 0, deleted.stderr)
   assert.match(deleted.stdout, /\[private\]/)
   assert.doesNotMatch(deleted.stdout, /\[public\]/)
+
+  // Playwright matches the spec for collection and the declaration file for each test.
+  writeFileSync(join(root, 'specs/factory.js'), "const {test}=require('@playwright/test'); exports.create=()=>test('from factory',()=>{})")
+  writeFileSync(join(root, 'specs/shared.spec.js'), "require('./factory').create()")
+  const unlistable = run(['tests', '-c', 'specs/factory.js', '--names'])
+  assert.equal(unlistable.status, 2)
+  assert.match(unlistable.stderr, /declared in a shared helper/)
+  const fallback = run(['tests', '-c', 'specs/factory.js', '--', process.execPath, require.resolve('@playwright/test/cli'), 'test', '--test-list', '{test-list}', '--reporter=line'])
+  assert.equal(fallback.status, 0, fallback.stderr)
+  assert.match(fallback.stderr, /running everything/)
+  assert.match(fallback.stdout, /4 passed/)
+  assert.match(fallback.stdout, /\[public\]/)
 })

@@ -197,6 +197,7 @@ function removedScripts(cwd: string, diff: DiscoverOptions): string[] {
 
 function playwright(cwd: string, config: string | undefined, diff: DiscoverOptions): TestSuite {
   const inventory = collectPlaywright(cwd, config)
+  if (inventory.sharedDeclaration) throw new Error('Playwright cannot represent tests declared in a shared helper as an exact spec-file test list: ' + inventory.sharedDeclaration)
   const globals = inventory.config ? [local(cwd, inventory.config) ?? inventory.config] : []
   const removed = inventory.projects.some(p => p.dependencies.length || p.teardown) ? removedScripts(cwd, diff) : []
   const common = [...globals, ...inventory.hooks.map(path => local(cwd, path)).filter(path => path !== undefined)]

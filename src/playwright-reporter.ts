@@ -3,6 +3,7 @@ import type { FullConfig, Reporter, Suite, TestError } from '@playwright/test/re
 
 export interface PlaywrightInventory {
   root: string
+  sharedDeclaration?: string
   config?: string
   hooks: string[]
   projects: { name: string; dir: string; dependencies: string[]; teardown?: string; files: string[] }[]
@@ -25,14 +26,18 @@ export default class InventoryReporter implements Reporter {
     const output = process.env.AFFECTED_PLAYWRIGHT_INVENTORY
     if (!output) throw new Error('Missing inventory destination')
     const collected = new Map(suite.suites.map(group => [group.project(), group.suites]))
+    let sharedDeclaration: string | undefined
     const projects = config.projects.map(project => {
       const files = (collected.get(project) ?? []).map(file => {
         if (!file.location) throw new Error('Missing Playwright file location')
-        return file.location.file
+        const path = file.location.file
+        // Playwright's test-list file filter uses the suite file, but its test filter uses the declaration file.
+        if (file.allTests().some(test => test.location.file !== path)) sharedDeclaration ??= path
+        return path
       })
       return { name: project.name, dir: project.testDir, dependencies: project.dependencies, ...(project.teardown && { teardown: project.teardown }), files }
     })
-    const inventory: PlaywrightInventory = { root: config.rootDir, ...(config.configFile && { config: config.configFile }), hooks: globalHooks(config), projects }
+    const inventory: PlaywrightInventory = { root: config.rootDir, ...(sharedDeclaration && { sharedDeclaration }), ...(config.configFile && { config: config.configFile }), hooks: globalHooks(config), projects }
     writeFileSync(output, JSON.stringify(inventory))
   }
 
