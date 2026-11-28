@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, readFileSync, writeFileSync, renameSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { parseArgs } from 'node:util'
 import { affected, compareShadow, detectBase, expandGlobs, isGlob, shadowPlan, type Affected, type EntryInput, type EntryPaths, type TraceEdge } from './index.ts'
 import { loadConfig, type AffectedConfig, type Runner } from './config.ts'
-import { discoverTests, testEntries } from './tests.ts'
+import { detectRunner, discoverTests, testEntries } from './tests.ts'
 import { FORMATS, firstRoot, githubOutput, githubSummary, render, selectedPaths, substitute, type Format } from './select.ts'
 
 const usage = `Usage:
   affected [options]                  Which entries does the diff reach?
-  affected tests [options]            Which test files does it reach? Vitest or Jest lists them.
+  affected tests [options]            Which test files does it reach? The project’s runner lists them.
   affected [tests] [options] -- <command…>
                                       Run <command> with the selection: {files} and {names}
                                       expand to it, and the files go last without either. An
@@ -22,7 +24,8 @@ Entries:
   --entry, -e <glob>          One entry per matching file, named by its path; repeat for several
   --config <file>             Read entries and defaults (default: affected.config.{ts,mts,js,mjs,json})
   --no-config                 Ignore affected.config.*
-  --runner <vitest|jest>      With tests: the runner to ask (default: the one package.json lists)
+  --runner <vitest|jest|playwright>      With tests: the runner to ask (default: the one package.json lists)
+  With Playwright, --names emits project-qualified lines. Use --test-list {test-list} after --.
   --runner-config <file>      With tests: the runner's config file
 
 Diff:
@@ -106,13 +109,26 @@ function append(variable: 'GITHUB_OUTPUT' | 'GITHUB_STEP_SUMMARY', text: string)
   appendFileSync(file, text)
 }
 
-function exec(command: readonly string[]): never {
+function exec(command: readonly string[], testList?: readonly string[]): never {
   const [program, ...args] = command
   if (!program) fail('missing command after --')
   // Windows resolves pnpm, npx and friends to .cmd shims, which only a shell can start.
-  const child = spawnSync(program, args, { stdio: 'inherit', shell: process.platform === 'win32' })
-  if (child.error) throw child.error
-  process.exit(child.status ?? 1)
+  const directory = testList && mkdtempSync(join(tmpdir(), 'affected-run-'))
+  let status: number
+  try {
+    let argv = args
+    if (directory && testList) {
+      const path = join(directory, 'tests.txt')
+      writeFileSync(path, testList.join('\n') + '\n')
+      argv = args.map(arg => arg === '{test-list}' ? path : arg)
+    }
+    const child = spawnSync(program, argv, { stdio: 'inherit', shell: process.platform === 'win32' })
+    if (child.error) throw child.error
+    status = child.status ?? 1
+  } finally {
+    if (directory) rmSync(directory, { recursive: true, force: true })
+  }
+  process.exit(status)
 }
 
 async function main(argv: string[]) {
@@ -175,17 +191,35 @@ async function main(argv: string[]) {
   const format = (values.format ?? (values.json ? 'json' : values.names ? 'names' : 'text')) as Format
   if (!FORMATS.includes(format)) fail(`unknown --format "${values.format}"`)
   const runner = values.runner
-  if (runner !== undefined && runner !== 'vitest' && runner !== 'jest') fail(`unknown --runner "${runner}"`)
+  if (runner !== undefined && runner !== 'vitest' && runner !== 'jest' && runner !== 'playwright') fail(`unknown --runner "${runner}"`)
 
   const config: AffectedConfig = values['no-config'] ? {} : (await loadConfig(process.cwd(), values.config))?.config ?? {}
 
+  const changed = values.changed?.flatMap(file =>
+    file === '-' ? readFileSync(0, 'utf8').split(/\r?\n/).filter(Boolean) : [file],
+  )
+  const base = values.base ?? config.base ?? (changed ? undefined : 'auto')
   let entries: Record<string, EntryInput>
   const globals = [...(config.globals ?? []), ...(values.global ?? [])]
+  let suite: Awaited<ReturnType<typeof discoverTests>> | undefined
   if (tests) {
     if (values.entry) fail('tests finds its own entries; drop --entry')
-    const chosen: Runner | undefined = runner ?? config.tests?.runner
+    const chosen: Runner = runner ?? config.tests?.runner ?? detectRunner()
     const runnerConfig = values['runner-config'] ?? config.tests?.config
-    const suite = await discoverTests({ ...(chosen && { runner: chosen }), ...(runnerConfig && { config: runnerConfig }) })
+    try {
+      suite = await discoverTests({
+        runner: chosen, ...(runnerConfig && { config: runnerConfig }),
+        ...(base && { base: base === 'auto' ? detectBase() : base }),
+        ...(changed && { changed }), uncommitted: !values.committed,
+      })
+    } catch (error) {
+      if (!command || chosen !== 'playwright') throw error
+      const listArg = command.indexOf('{test-list}')
+      if (listArg >= 0 && command[listArg - 1] !== '--test-list') throw error
+      const full = listArg < 0 ? command : [...command.slice(0, listArg - 1), ...command.slice(listArg + 1)]
+      console.error(`affected: ${error instanceof Error ? error.message : String(error)}\naffected: running everything`)
+      exec(substitute(full, undefined, undefined))
+    }
     entries = testEntries(suite)
     globals.push(...suite.globals)
   } else {
@@ -194,6 +228,10 @@ async function main(argv: string[]) {
   }
   if (!Object.keys(entries).length) fail('pass at least one --entry, or add entries to affected.config')
 
+  const wantsList = command?.includes('{test-list}')
+  if (wantsList && (suite?.runner !== 'playwright' || command?.some(arg => arg === '{files}' || arg === '{names}'))) {
+    fail('{test-list} requires Playwright discovery and cannot be mixed with {files} or {names}')
+  }
   const inputs: Record<string, string[]> = Object.create(null)
   for (const spec of values.input ?? []) {
     const [name, glob] = pair(spec, '--input')
@@ -212,10 +250,6 @@ async function main(argv: string[]) {
     ? substitute(cmd, undefined, undefined)
     : substitute(cmd, [...new Set(Object.values(entries).map(firstRoot).filter(path => path !== undefined))], Object.keys(entries))
 
-  const changed = values.changed?.flatMap(file =>
-    file === '-' ? readFileSync(0, 'utf8').split(/\r?\n/).filter(Boolean) : [file],
-  )
-  const base = values.base ?? config.base ?? (changed ? undefined : 'auto')
   const strict = values['no-strict'] ? false : Boolean(values.strict || config.strict || tests || command)
 
   let result: Affected
@@ -226,7 +260,7 @@ async function main(argv: string[]) {
       ...(changed && { changed }),
       ...(globals.length && { globals }),
       uncommitted: !values.committed,
-      types: values['no-types'] ? false : config.types ?? true,
+      types: values['no-types'] ? false : values.types ?? config.types ?? (suite?.runner !== 'playwright'),
       ...(values.graph && { graph: 'mermaid' }),
       ...(strict && { strict: true }),
       ...(values.trace && { trace: traceEdges(values.trace) }),
@@ -234,9 +268,11 @@ async function main(argv: string[]) {
   } catch (error) {
     if (!command) throw error
     console.error(`affected: ${error instanceof Error ? error.message : String(error)}\naffected: running everything`)
+    if (wantsList) exec(command, Object.keys(entries))
     exec(everything(command))
   }
 
+  if (values['shadow-out'] && suite?.runner === 'playwright') fail('Playwright shadow comparison requires a project-aware results reporter')
   if (values['shadow-out']) writeAtomic(values['shadow-out'], JSON.stringify(shadowPlan(result, entries)) + '\n')
   if (values['github-output']) append('GITHUB_OUTPUT', githubOutput(result, entries))
   if (values['github-summary']) append('GITHUB_STEP_SUMMARY', githubSummary(result, base === 'auto' ? detectBase() : base))
@@ -251,9 +287,16 @@ async function main(argv: string[]) {
       return
     }
     console.error(`affected: ${hit} of ${total} entries affected`)
+    if (wantsList) exec(command, result.hit)
     exec(hit === total ? everything(command) : substitute(command, selectedPaths(result, entries), result.hit))
   }
 
+  if (format === 'playwright' && suite?.runner === 'playwright') {
+    const paths = new Set(selectedPaths(result, entries))
+    if (suite.files.some(file => paths.has(file.path) && !result.has(file.name ?? file.path))) {
+      fail('This selection differs by project. Use --names for a Playwright --test-list file.')
+    }
+  }
   const text = result.mermaid ?? render(result, entries, format, tests)
   if (text) console.log(text)
   if (values['exit-code']) process.exitCode = result.any ? 0 : 1

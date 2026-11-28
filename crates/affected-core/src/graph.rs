@@ -7,6 +7,7 @@ use oxc_resolver::{
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::bindings::{Binding, Changes};
 use crate::imports::{self, Kind, Specifier};
 use crate::manifest::{self, Manifests};
 use crate::source::Source;
@@ -17,11 +18,15 @@ use crate::{Entry, Error, TraceEdge};
 /// across revisions; the rest are cached per revision.
 #[derive(Default)]
 pub(crate) struct ParseCache {
+    bindings: bool,
     disk: Mutex<FxHashMap<PathBuf, Arc<[Specifier]>>>,
     revision: Mutex<FxHashMap<PathBuf, Arc<[Specifier]>>>,
 }
 
 impl ParseCache {
+    pub(crate) fn new(bindings: bool) -> Self {
+        Self { bindings, ..Self::default() }
+    }
     fn specifiers<S: Source>(&self, source: &S, path: &Path) -> Arc<[Specifier]> {
         let map = if source.matches_disk(path) { &self.disk } else { &self.revision };
         // Poison means another parser panicked; the map still only holds complete entries.
@@ -29,7 +34,7 @@ impl ParseCache {
             return Arc::clone(cached);
         }
         let parsed: Arc<[Specifier]> = match source.read_to_string(path) {
-            Ok(text) if imports::is_parseable(path) => imports::extract(path, &text).into(),
+            Ok(text) if imports::is_parseable(path) => imports::extract(path, &text, self.bindings).into(),
             Err(error) if imports::is_parseable(path) => Arc::from([Specifier {
                 request: format!("cannot read source: {error}").into(),
                 type_only: false,
@@ -49,6 +54,7 @@ impl ParseCache {
 pub(crate) struct Graph {
     pub(crate) files: Vec<PathBuf>,
     parents: Vec<Option<usize>>,
+    precise: FxHashMap<PathBuf, Option<Vec<PathBuf>>>,
     index: FxHashMap<PathBuf, usize>,
     pub(crate) unknown: Vec<(PathBuf, String)>,
     /// Target node of each trace edge chosen by the breadth-first walk.
@@ -69,6 +75,13 @@ impl Graph {
 
     /// The import chain from an entry root to `path`, root first.
     pub(crate) fn chain(&self, path: &Path) -> Option<Vec<PathBuf>> {
+        if let Some(chain) = self.precise.get(path) {
+            return chain.clone();
+        }
+        self.file_chain(path)
+    }
+
+    fn file_chain(&self, path: &Path) -> Option<Vec<PathBuf>> {
         let mut current = *self.index.get(path)?;
         let mut chain = vec![self.files.get(current)?.clone()];
         while let Some(parent) = self.parents.get(current).copied().flatten() {
@@ -77,6 +90,61 @@ impl Graph {
         }
         chain.reverse();
         Some(chain)
+    }
+}
+
+type Consumers = FxHashMap<PathBuf, Vec<(usize, Option<Arc<Binding>>)>>;
+
+impl Graph {
+    /// Walk *every* incoming edge of the changed export, including paths through
+    /// different barrels and aliases. Opaque consumers retain ordinary reachability.
+    fn binding_chain(&self, changed: &Path, names: &[String], consumers: &Consumers) -> Option<Vec<PathBuf>> {
+        use std::collections::VecDeque;
+        let mut queue: VecDeque<_> = names.iter().map(|name| (name.clone(), vec![changed.to_owned()])).collect();
+        let mut seen = FxHashSet::default();
+        let mut best = None;
+        while let Some((symbol, suffix)) = queue.pop_front() {
+            let file = suffix.last()?;
+            if !seen.insert((file.clone(), symbol.clone())) {
+                continue;
+            }
+            if self.index.get(file).and_then(|i| self.parents.get(*i)).is_some_and(Option::is_none) {
+                let path: Vec<_> = suffix.into_iter().rev().collect();
+                if best.as_ref().is_none_or(|old: &Vec<_>| path.len() < old.len()) {
+                    best = Some(path);
+                }
+                continue;
+            }
+            for (id, binding) in consumers.get(file).into_iter().flatten() {
+                let parent = self.files.get(*id)?;
+                let mut forward = |name: &str| {
+                    let mut path = suffix.clone();
+                    path.push(parent.clone());
+                    queue.push_back((name.to_owned(), path));
+                };
+                match binding.as_deref() {
+                    Some(Binding::Star) => {
+                        if symbol != "default" {
+                            forward(&symbol);
+                        }
+                    }
+                    Some(Binding::Aliases(pairs)) => {
+                        for (_, alias) in pairs.iter().filter(|(name, _)| name == &symbol) {
+                            forward(alias);
+                        }
+                    }
+                    Some(Binding::Names(names)) if !names.contains(&symbol) => {}
+                    _ => {
+                        let mut path = self.file_chain(parent)?;
+                        path.extend(suffix.iter().rev().cloned());
+                        if best.as_ref().is_none_or(|old| path.len() < old.len()) {
+                            best = Some(path);
+                        }
+                    }
+                }
+            }
+        }
+        best
     }
 }
 
@@ -160,6 +228,7 @@ type EdgeKey = (Arc<Context>, PathBuf);
 
 #[derive(Default)]
 struct Dependencies {
+    bindings: FxHashMap<PathBuf, Arc<Binding>>,
     files: Vec<PathBuf>,
     unknown: Vec<String>,
 }
@@ -232,7 +301,7 @@ impl<'c, S: Source> Walker<'c, S> {
 
     /// The graph of one entry. Roots missing from this revision are skipped: the caller
     /// has checked that each exists on at least one side of the diff.
-    pub(crate) fn build(&self, entry: &Entry) -> Result<Graph, Error> {
+    pub(crate) fn build(&self, entry: &Entry, changes: &Changes) -> Result<Graph, Error> {
         let mut graph = Graph::default();
         let mut frontier: Vec<(usize, Arc<Context>)> = Vec::new();
         match entry {
@@ -262,6 +331,8 @@ impl<'c, S: Source> Walker<'c, S> {
             }
         }
 
+        let refine = !changes.is_empty() && matches!(entry, Entry::Files(_));
+        let mut consumers = Consumers::default();
         while !frontier.is_empty() {
             let visit = |(id, context): &(usize, Arc<Context>)| {
                 let file = graph.files.get(*id)?;
@@ -281,16 +352,31 @@ impl<'c, S: Source> Walker<'c, S> {
                 }
                 let traced = self.trace.get(file).cloned().unwrap_or_default();
                 for dependency in &dependencies.files {
+                    if refine {
+                        consumers
+                            .entry(dependency.clone())
+                            .or_default()
+                            .push((parent, dependencies.bindings.get(dependency).cloned()));
+                    }
                     if let Some(id) = graph.insert(dependency.clone(), Some(parent)) {
                         frontier.push((id, Arc::clone(&context)));
                     }
                 }
                 for dependency in traced {
+                    if refine {
+                        consumers.entry(dependency.clone()).or_default().push((parent, None));
+                    }
                     if let Some(id) = graph.insert(dependency.clone(), Some(parent)) {
                         graph.traced.insert(dependency);
                         frontier.push((id, Arc::clone(&context)));
                     }
                 }
+            }
+        }
+        if refine {
+            for (path, names) in changes.iter().filter(|(p, _)| graph.index.contains_key(*p)) {
+                let chain = graph.binding_chain(path, names, &consumers);
+                graph.precise.insert(path.clone(), chain);
             }
         }
         Ok(graph)
@@ -355,17 +441,18 @@ impl<'c, S: Source> Walker<'c, S> {
         } else {
             context
         };
+        let mut broad: FxHashSet<PathBuf> = deps.files.iter().cloned().collect();
         for spec in self.parses.specifiers(&self.source, file).iter().filter(|s| self.types || !s.type_only) {
+            let start = deps.files.len();
             let request = &spec.request;
+            let static_import = matches!(spec.kind, Kind::Module | Kind::Bound(_));
             match &spec.kind {
-                Kind::Module | Kind::Require | Kind::DynamicImport => {
+                Kind::Module | Kind::Bound(_) | Kind::Require | Kind::DynamicImport => {
                     let ext = file.extension().and_then(|s| s.to_str());
-                    let require =
-                        spec.kind == Kind::Require || (spec.kind == Kind::Module && matches!(ext, Some("cts" | "cjs")));
+                    let require = spec.kind == Kind::Require || (static_import && matches!(ext, Some("cts" | "cjs")));
                     // A TS static import can emit either module kind. Keep both runtime branches
                     // for package specifiers when the file extension does not determine its emit.
-                    let ambiguous =
-                        spec.kind == Kind::Module && matches!(ext, Some("ts" | "tsx")) && !request.starts_with('.');
+                    let ambiguous = static_import && matches!(ext, Some("ts" | "tsx")) && !request.starts_with('.');
                     let modes: &[bool] = if ambiguous { &[false, true] } else { std::slice::from_ref(&require) };
                     let mut resolved = false;
                     for &require in modes {
@@ -399,6 +486,21 @@ impl<'c, S: Source> Walker<'c, S> {
                 Kind::File => self.resolve_path(file, &tsconfig::normalize(&dir.join(&**request)), &mut deps.files),
                 Kind::Glob => self.resolve_glob(dir, request, &[], &mut deps.files),
                 Kind::GlobExcept(excluded) => self.resolve_glob(dir, request, excluded, &mut deps.files),
+            }
+            if !self.parses.bindings {
+                continue;
+            }
+            for path in deps.files.get(start..).unwrap_or_default() {
+                if let Kind::Bound(binding) = &spec.kind
+                    && !broad.contains(path)
+                {
+                    let prior = deps.bindings.entry(path.clone()).or_insert_with(|| Arc::new(binding.clone()));
+                    if prior.as_ref() == binding {
+                        continue;
+                    }
+                }
+                broad.insert(path.clone());
+                deps.bindings.remove(path);
             }
         }
         deps.files.retain(|path| path != file);

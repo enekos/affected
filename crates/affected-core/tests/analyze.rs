@@ -610,3 +610,72 @@ fn yarn_lockfiles_it_cannot_compare_select_every_entry() {
         assert_eq!(selected(&repo, &options, lock, &broken), EVERY_ENTRY);
     }
 }
+
+#[test]
+fn named_barrel_consumers_follow_aliases_and_keep_opaque_edges() {
+    let repo = Repo::new(&[
+        ("ui/search.ts", "export class Search { title() { return 'old' } }"),
+        ("ui/editor.ts", "export class Editor {}"),
+        ("ui/index.ts", "export * from './search'; export * from './editor'"),
+        ("alias.ts", "export { Search as Find, Editor } from './ui'"),
+        ("search.spec.ts", "import { Find } from './alias'; new Find()"),
+        ("editor.spec.ts", "import { Editor } from './alias'; new Editor()"),
+        ("namespace.spec.ts", "import * as all from './ui'; use(all)"),
+        ("side-effect.spec.ts", "import './ui'"),
+        ("alternate.spec.ts", "import { Editor } from './alias'; import './bridge'"),
+        ("bridge.ts", "import { Search } from './ui'; use(Search)"),
+    ]);
+    let options = ["search", "editor", "namespace", "side-effect", "alternate"]
+        .into_iter()
+        .fold(Options::new(repo.path()).types(false).base("main"), |o, name| {
+            o.entry(name, Entry::Files(vec![format!("{name}.spec.ts").into()]))
+        });
+    repo.write(&[("ui/search.ts", "export class Search { title() { return 'new' } }")]);
+    let run = || analyze(&options).unwrap().entries;
+    let entries = run();
+    assert_eq!(
+        entries.iter().filter(|e| e.selected).map(|e| e.name.as_str()).collect::<Vec<_>>(),
+        ["search", "namespace", "side-effect", "alternate"]
+    );
+    assert!(entries[1].files.contains(&"ui/search.ts".to_owned()));
+    assert_eq!(entries[0].chain, ["search.spec.ts", "alias.ts", "ui/index.ts", "ui/search.ts"]);
+    for effect in [
+        "register(); export class Search {}",
+        "export class Search { static value = register() }",
+        "import './setup'; export class Search {}",
+    ] {
+        repo.write(&[("ui/search.ts", effect)]);
+        assert!(run().iter().all(|e| e.selected));
+    }
+    // Removing module-load effects must also select all consumers.
+    repo.commit("effectful");
+    repo.write(&[("ui/search.ts", "export class Search {}")]);
+    assert!(run().iter().all(|e| e.selected));
+}
+
+#[test]
+fn runtime_bindings_union_revisions_and_widen_when_typescript_could_start_loading_a_value_import() {
+    let repo = Repo::new(&[
+        ("page.ts", "import { activate } from './plugin'; export function page() { return 'old'; }"),
+        ("plugin.ts", "console.log('loaded'); export function activate() {}"),
+        ("other.ts", "export const other = 1"),
+        ("index.ts", "export * from './page'; export * from './other'"),
+        ("prior.spec.ts", "import { page } from './index'; page()"),
+        ("unrelated.spec.ts", "import { other } from './index'; use(other)"),
+    ]);
+    let options = Options::new(repo.path())
+        .types(false)
+        .base("main")
+        .changed(vec!["page.ts".into()])
+        .entry("prior", Entry::Files(vec!["prior.spec.ts".into()]))
+        .entry("unrelated", Entry::Files(vec!["unrelated.spec.ts".into()]));
+    repo.write(&[
+        ("prior.spec.ts", "import { other } from './index'"),
+        ("page.ts", "import { activate } from './plugin'; export function page() { return 'new'; }"),
+    ]);
+    let report = analyze(&options).unwrap();
+    assert_eq!(report.entries[0].revision.as_deref(), Some("base"));
+    assert!(!report.entries[1].selected);
+    repo.write(&[("page.ts", "import { activate } from './plugin'; export function page() { activate(); }")]);
+    assert!(analyze(&options).unwrap().entries.iter().all(|e| e.selected));
+}

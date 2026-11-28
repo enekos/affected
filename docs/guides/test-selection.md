@@ -7,7 +7,7 @@ nav_order: 2
 # Run only the tests a diff reaches
 
 `affected tests` makes each test file an entry. It asks the project's own runner which files it would
-run: Vitest through `createVitest` (Vitest 3 or later), Jest through `--listTests` and `--showConfig`.
+run: Vitest through `createVitest` (Vitest 3 or later), Jest through `--listTests` and `--showConfig`, and Playwright through `test --list`.
 Setup and global-setup files become extra roots of every test entry, so a change behind a setup file
 selects every test, and the runner's config file is a global. Entries share resolution work, so a
 thousand of them cost little more than one — 1,183 test files resolve in ~220 ms on a 5,000-file service.
@@ -27,7 +27,7 @@ vitest run $(npx affected tests --format vitest)     # or splice runner argument
 | Analysis failed (no merge base, unknown ref) | The command runs on everything. Without a command, `affected` exits 2. |
 | An import could not be resolved | Strict is on by default with `tests` and commands: the entry is selected. `--no-strict` turns it off. |
 
-Without Vitest or Jest, use glob entries: `npx affected -e 'test/**/*.test.ts' -b auto -- node --test {files}`.
+For other runners, use glob entries: `npx affected -e 'test/**/*.test.ts' -b auto -- node --test {files}`.
 
 ## From code
 
@@ -54,6 +54,18 @@ Leave lockfiles out of `globals`: a change to `package-lock.json`, `pnpm-lock.ya
 `yarn.lock` already selects only the tests importing a dependency whose resolution changed, transitively.
 Lockfiles the selector cannot compare (Yarn classic, Bun, unknown versions, changed settings or
 overrides) select every test.
+
+## Playwright projects and setup
+
+```sh
+npx affected tests --runner playwright -b origin/main -- playwright test --test-list {test-list}
+```
+
+Each entry identifies a project and a spec file. A temporary Playwright test list preserves that pair when multiple projects share the same file. Playwright runs its usual prerequisites. If a helper declares tests outside their collected spec file, Playwright cannot reliably express that file in a test list. The command falls back to the full run and a plan-only invocation reports the reason. To pass the plan to an existing scheduler, use `--names` for Playwright test-list lines or `--format paths` for a deduplicated file list. Pass the same config to discovery and execution when using a custom config. Test-list execution requires a Playwright version with `--test-list`.
+
+The config and its imports, global setup/teardown and prerequisite project files are roots for the relevant entries. Deleted scripts in a prerequisite project's directory conservatively select its dependents. Playwright discovery defaults to runtime imports. Use `--types` to include type-only imports. For browser or service code reached only over the network, supply traced edges or configured inputs.
+
+Runtime analysis across a git base can narrow a change to an exported function, class or literal through a barrel of re-exports. Both revisions must preserve the exports and module initialization. A side-effect import, namespace consumer or uncertain change keeps the broader selection. The file inventory still lists all reachable modules.
 
 ## Verify selection while running the full suite
 

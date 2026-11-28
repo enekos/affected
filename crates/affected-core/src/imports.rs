@@ -14,6 +14,7 @@ use oxc_span::{GetSpan, SourceType};
 pub(crate) enum Kind {
     /// A module specifier, resolved like `import` resolves it.
     Module,
+    Bound(crate::bindings::Binding),
     Require,
     DynamicImport,
     Unknown,
@@ -57,14 +58,14 @@ pub(crate) fn is_parseable(path: &Path) -> bool {
 /// Every module request in `source`: static imports and re-exports, `import()`,
 /// `require()`, `import x = require()`, `import('…')` types, triple-slash references,
 /// test-runner mocks, globs and asset paths.
-pub(crate) fn extract(path: &Path, source: &str) -> Vec<Specifier> {
+pub(crate) fn extract(path: &Path, source: &str, bindings: bool) -> Vec<Specifier> {
     if is_component(path) {
         return component_scripts(source)
-            .flat_map(|(script, source_type)| extract_script(script, source_type))
+            .flat_map(|(script, source_type)| extract_script(script, source_type, false))
             .collect();
     }
     match SourceType::from_path(path) {
-        Ok(source_type) => extract_script(source, source_type),
+        Ok(source_type) => extract_script(source, source_type, bindings),
         Err(_) => Vec::new(),
     }
 }
@@ -97,18 +98,23 @@ fn component_scripts(source: &str) -> impl Iterator<Item = (&str, SourceType)> {
     frontmatter.into_iter().chain(blocks)
 }
 
-fn extract_script(source: &str, source_type: SourceType) -> Vec<Specifier> {
+fn extract_script(source: &str, source_type: SourceType, bindings: bool) -> Vec<Specifier> {
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, source_type)
         .with_options(ParseOptions { parse_regular_expression: false, ..ParseOptions::default() })
         .parse();
 
     let mut found = Vec::with_capacity(parsed.module_record.requested_modules.len());
+    let mut bindings = if bindings && parsed.diagnostics.is_empty() {
+        crate::bindings::requests(&parsed.program)
+    } else {
+        Default::default()
+    };
     for (request, occurrences) in &parsed.module_record.requested_modules {
         found.push(Specifier {
             request: request.as_str().into(),
             type_only: occurrences.iter().all(|occurrence| occurrence.is_type),
-            kind: Kind::Module,
+            kind: bindings.remove(request.as_str()).map(Kind::Bound).unwrap_or(Kind::Module),
         });
     }
 
@@ -388,9 +394,9 @@ mod tests {
     use super::*;
 
     fn requests(path: &str, source: &str) -> Vec<(String, bool)> {
-        let mut found: Vec<_> = extract(Path::new(path), source)
+        let mut found: Vec<_> = extract(Path::new(path), source, false)
             .into_iter()
-            .filter(|s| matches!(s.kind, Kind::Module | Kind::Require | Kind::DynamicImport))
+            .filter(|s| matches!(s.kind, Kind::Module | Kind::Bound(_) | Kind::Require | Kind::DynamicImport))
             .map(|s| (s.request.into_string(), s.type_only))
             .collect();
         found.sort();
@@ -398,7 +404,7 @@ mod tests {
     }
 
     fn of_kind(path: &str, source: &str, kind: Kind) -> Vec<String> {
-        let mut found: Vec<_> = extract(Path::new(path), source)
+        let mut found: Vec<_> = extract(Path::new(path), source, false)
             .into_iter()
             .filter(|s| s.kind == kind || (kind == Kind::Glob && matches!(s.kind, Kind::GlobExcept(_))))
             .map(|s| s.request.into_string())
