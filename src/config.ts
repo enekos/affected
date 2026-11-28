@@ -3,7 +3,7 @@ import { extname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { EntryInput } from './index.ts'
 
-export type Runner = 'vitest' | 'jest'
+export type Runner = 'vitest' | 'jest' | 'playwright'
 
 export interface AffectedConfig<Name extends string = string> {
   /** Named starting points of the import graph, as in `affected({ entries })`. */
@@ -66,7 +66,7 @@ export function parseConfig(value: unknown, file: string): AffectedConfig {
   if (tests !== undefined) {
     if (typeof tests !== 'object' || tests === null) invalid('"tests" must be an object')
     const { runner, config: runnerConfig, ...rest } = tests as Record<string, unknown>
-    if (runner !== undefined && runner !== 'vitest' && runner !== 'jest') invalid('"tests.runner" must be "vitest" or "jest"')
+    if (runner !== undefined && runner !== 'vitest' && runner !== 'jest' && runner !== 'playwright') invalid('"tests.runner" must be "vitest", "jest" or "playwright"')
     if (runnerConfig !== undefined && typeof runnerConfig !== 'string') invalid('"tests.config" must be a path')
     for (const key of Object.keys(rest)) invalid(`unknown key "tests.${key}"`)
   }

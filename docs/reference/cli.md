@@ -8,7 +8,7 @@ nav_order: 2
 
 ```
 affected [options]                         which entries does the diff reach?
-affected tests [options]                   which test files? Vitest or Jest lists them
+affected tests [options]                   which test files? Vitest, Jest or Playwright lists them
 affected [tests] [options] -- <command…>   run <command> with the selection
 ```
 
@@ -21,7 +21,7 @@ fails, the command runs on everything. Its exit code becomes affected's.
 |---|---|
 | `-e, --entry <name>=<paths>` | An entry; repeat for several. Comma-separate several files; globs expand. |
 | `-e, --entry <glob>` | One entry per matching file, named by its path. Matches files git does not ignore. |
-| `--runner vitest\|jest` | With `tests`: the runner to ask. Defaults to the one `package.json` depends on. |
+| `--runner vitest\|jest\|playwright` | With `tests`: the runner to ask. Defaults to the one `package.json` depends on. |
 | `--runner-config <file>` | With `tests`: the runner's config file. |
 | `-b, --base <ref>` | Compare against the fork point of `<ref>`. Defaults to `auto`, the CI target branch, unless `--changed` is given. |
 | `-c, --changed <file>` | A changed file; repeat, or `-` to read lines from stdin. |

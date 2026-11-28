@@ -5,6 +5,7 @@
 //! file affects an entry when either graph reaches it, so imports that were added or
 //! removed count too.
 
+mod bindings;
 mod git;
 mod graph;
 mod imports;
@@ -158,7 +159,7 @@ pub struct EntryReport {
     pub name: String,
     /// Every file the entry reaches on either revision, sorted.
     pub files: Vec<String>,
-    /// The changed files the entry reaches, sorted.
+    /// The changed inputs that affect the entry, sorted. A runtime diff can exclude unused re-exports.
     pub hits: Vec<String>,
     /// The shortest import chain from an entry root to a changed file; empty when not hit.
     pub chain: Vec<String>,
@@ -273,8 +274,13 @@ fn analyze_trees(
     tree: impl Source,
     base_tree: Option<GitTree>,
 ) -> Result<Report, Error> {
-    let head_cache = ParseCache::default();
-    let base_cache = ParseCache::default();
+    let bindings = base_tree
+        .as_ref()
+        .filter(|_| !options.types && entries.iter().any(|(_, e)| matches!(e, Entry::Files(_))))
+        .map(|base| bindings::compare(&tree, base, &changed))
+        .unwrap_or_default();
+    let head_cache = ParseCache::new(!bindings.is_empty());
+    let base_cache = ParseCache::new(!bindings.is_empty());
     // Two committed snapshots can both differ from disk *and* from one another.
     let cache = if options.uncommitted { &head_cache } else { &base_cache };
     let head = Walker::new(tree, root, options.types, &head_cache, &options.trace, cwd, "head");
@@ -291,8 +297,10 @@ fn analyze_trees(
     let reports = entries
         .par_iter()
         .map(|(name, entry)| {
-            let (head_graph, base_graph) =
-                rayon::join(|| head.build(entry), || base.as_ref().map(|base| base.build(entry)).transpose());
+            let (head_graph, base_graph) = rayon::join(
+                || head.build(entry, &bindings),
+                || base.as_ref().map(|base| base.build(entry, &bindings)).transpose(),
+            );
             let inputs = options.inputs.iter().filter(|(entry, _)| entry == name).flat_map(|(_, globs)| globs);
             let inputs = globs(cwd, &inputs.cloned().collect::<Vec<_>>())?;
             let matched = |path: &PathBuf| globals.is_match(path) || inputs.is_match(path);

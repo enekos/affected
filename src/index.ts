@@ -90,7 +90,7 @@ export interface Entry<Name extends string = string> {
   readonly reason?: string
   readonly revision?: string
   readonly traceSteps: readonly string[]
-  /** The changed files this entry reaches. */
+  /** Changed inputs that affect this entry, after runtime re-export filtering. */
   readonly hits: readonly string[]
   /** The shortest import chain from an entry root to a changed file. Empty when not hit. */
   readonly chain: readonly string[]

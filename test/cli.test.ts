@@ -254,3 +254,52 @@ test('Mermaid bounds fan-out while the JSON report keeps the whole selection', t
   assert.match(graph.stdout, /5 additional entries/)
   assert.equal(JSON.parse(run([...args, '-c', 'src/b.ts', '--json']).stdout).entries.length, 25)
 })
+
+test('real Playwright collection preserves project identity, transitive setup and teardown, and global hooks', async t => {
+  const { root, run } = repo(t, {
+    'package.json': '{"devDependencies":{"@playwright/test":"*"}}',
+    'playwright.config.cjs': `module.exports = {
+      testDir: './specs', globalSetup: ['./first.cjs', './second.cjs'],
+      projects: [{name: 'seed', testMatch: /seed.spec.js/, teardown: 'cleanup'},
+        {name: 'cleanup', testMatch: /cleanup.spec.js/},
+        {name: 'login', dependencies: ['seed'], testMatch: /login.spec.js/},
+        {name: 'private', dependencies: ['login'], testMatch: /shared.spec.js/},
+        {name: 'public', testMatch: /shared.spec.js/}]
+    }`,
+    'first.cjs': 'module.exports = () => {}',
+    'second.cjs': "require('./global-helper.cjs');module.exports = () => {}",
+    'global-helper.cjs': '',
+    ...Object.fromEntries(['seed', 'cleanup', 'login', 'shared'].map(name =>
+      ['specs/' + name + '.spec.js', "const {test}=require('@playwright/test'); test('example',()=>{})"])),
+  })
+  const { symlinkSync } = await import('node:fs')
+  const { createRequire } = await import('node:module')
+  const require = createRequire(import.meta.url)
+  mkdirSync(join(root, 'node_modules/@playwright'), { recursive: true })
+  symlinkSync(dirname(require.resolve('@playwright/test/package.json')), join(root, 'node_modules/@playwright/test'), 'junction')
+  const choose = (file: string) => {
+    const result = run(['tests', '--changed', file, '--names'])
+    assert.equal(result.status, 0, result.stderr)
+    return result.stdout.trim().split('\n')
+  }
+  const selection = choose('specs/cleanup.spec.js')
+  assert.ok(selection.some(line => line.startsWith('[private]')))
+  assert.ok(!selection.some(line => line.startsWith('[public]')))
+  assert.equal(choose('global-helper.cjs').length, 5)
+  assert.equal(choose('playwright.config.cjs').length, 5)
+  const invocation = run(['tests', '-c', 'specs/cleanup.spec.js', '--', process.execPath, require.resolve('@playwright/test/cli'), 'test', '--test-list', '{test-list}', '--reporter=line'])
+  assert.equal(invocation.status, 0, invocation.stderr)
+  assert.match(invocation.stdout, /4 passed/)
+  assert.doesNotMatch(invocation.stdout, /\[public\]/)
+  assert.equal(run(['tests', '-c', 'specs/cleanup.spec.js', '-f', 'playwright']).status, 2)
+  const list = join(root, 'selected.txt')
+  writeFileSync(list, selection.join('\n'))
+  const actual = execFileSync(process.execPath, [require.resolve('@playwright/test/cli'), 'test', '--list', '--test-list', list], { cwd: root, encoding: 'utf8' })
+  assert.match(actual, /\[private\] .*shared.spec.js/)
+  assert.doesNotMatch(actual, /\[public\]/)
+  rmSync(join(root, 'specs/seed.spec.js'))
+  const deleted = run(['tests', '-b', 'HEAD', '--names'])
+  assert.equal(deleted.status, 0, deleted.stderr)
+  assert.match(deleted.stdout, /\[private\]/)
+  assert.doesNotMatch(deleted.stdout, /\[public\]/)
+})

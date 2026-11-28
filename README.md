@@ -56,13 +56,14 @@ changed file hits an entry when either graph reaches it, so imports a PR adds *o
     run: pnpm vitest run {files}
 ```
 
-The Action asks Vitest or Jest for the test files and their setup files, fetches the target branch on
+The Action asks Vitest, Jest or Playwright for the test files and their setup files, fetches the target branch on
 shallow checkouts, runs the command on the hit files, skips it when none is hit, and runs everything when
 the analysis is incomplete. It also writes a job summary with the import chain behind each hit.
 Outside GitHub Actions use the CLI:
 
 ```sh
 npx @enekos/affected tests -- vitest run {files}     # or: jest {files}
+npx @enekos/affected tests --runner playwright -- playwright test --test-list {test-list}
 npx @enekos/affected tests --format vitest           # runner arguments for the hit tests, or none
 ```
 
