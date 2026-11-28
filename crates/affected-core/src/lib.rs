@@ -10,6 +10,7 @@ mod graph;
 mod imports;
 mod lockfile;
 mod manifest;
+mod mermaid;
 mod source;
 mod tsconfig;
 

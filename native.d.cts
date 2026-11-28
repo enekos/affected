@@ -49,10 +49,12 @@ export interface NativeOptions {
   types?: boolean
   globals?: Array<string>
   strict?: boolean
+  mermaid?: boolean
   trace?: Array<NativeTraceEdge>
 }
 
 export interface NativeReport {
+  mermaid?: string
   changed: Array<string>
   entries: Array<NativeEntryReport>
 }

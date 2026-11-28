@@ -41,6 +41,7 @@ pub struct NativeOptions {
     pub types: Option<bool>,
     pub globals: Option<Vec<String>>,
     pub strict: Option<bool>,
+    pub mermaid: Option<bool>,
     pub trace: Option<Vec<NativeTraceEdge>>,
 }
 
@@ -61,6 +62,7 @@ pub struct NativeEntryReport {
 #[napi(object)]
 #[derive(Debug)]
 pub struct NativeReport {
+    pub mermaid: Option<String>,
     pub changed: Vec<String>,
     pub entries: Vec<NativeEntryReport>,
 }
@@ -95,9 +97,10 @@ impl From<NativeOptions> for Options {
     }
 }
 
-impl From<Report> for NativeReport {
-    fn from(report: Report) -> Self {
+impl NativeReport {
+    fn from_report(report: Report, mermaid: bool) -> Self {
         Self {
+            mermaid: mermaid.then(|| report.mermaid()),
             changed: report.changed,
             entries: report
                 .entries
@@ -128,7 +131,8 @@ fn run(options: &Options) -> Result<Report> {
 
 #[napi]
 pub fn analyze(options: NativeOptions) -> Result<NativeReport> {
-    run(&options.into()).map(NativeReport::from)
+    let mermaid = options.mermaid.unwrap_or(false);
+    run(&options.into()).map(|report| NativeReport::from_report(report, mermaid))
 }
 
 /// Files matching any `include` glob and no `exclude` glob, relative to `cwd`, sorted.
@@ -139,7 +143,7 @@ pub fn expand(cwd: String, include: Vec<String>, exclude: Vec<String>) -> Result
 }
 
 #[derive(Debug)]
-pub struct Analysis(Options);
+pub struct Analysis(Options, bool);
 
 impl Task for Analysis {
     type Output = Report;
@@ -150,11 +154,12 @@ impl Task for Analysis {
     }
 
     fn resolve(&mut self, _env: Env, output: Report) -> Result<NativeReport> {
-        Ok(output.into())
+        Ok(NativeReport::from_report(output, self.1))
     }
 }
 
 #[napi(ts_return_type = "Promise<NativeReport>")]
 pub fn analyze_async(options: NativeOptions) -> AsyncTask<Analysis> {
-    AsyncTask::new(Analysis(options.into()))
+    let mermaid = options.mermaid.unwrap_or(false);
+    AsyncTask::new(Analysis(options.into(), mermaid))
 }

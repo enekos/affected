@@ -37,6 +37,7 @@ Diff:
   --trace <file>              Read traced edges [{from,to,revision?}] from JSON
 
 Output:
+  --graph mermaid             Print a fenced PR impact diagram (also included with --github-summary)
   --format, -f <format>       ${FORMATS.join(', ')}.
                               The runner formats print arguments that run exactly the hit test files
   --json, --names             Short for --format json, --format names
@@ -142,6 +143,7 @@ async function main(argv: string[]) {
       global: { type: 'string', short: 'g', multiple: true },
       input: { type: 'string', short: 'i', multiple: true },
       format: { type: 'string', short: 'f' },
+      graph: { type: 'string' },
       json: { type: 'boolean' },
       names: { type: 'boolean' },
       'github-output': { type: 'boolean' },
@@ -156,6 +158,9 @@ async function main(argv: string[]) {
     return
   }
   if (positionals.length) fail(`unexpected argument "${positionals[0]}"`)
+
+  if (values.graph !== undefined && values.graph !== 'mermaid') fail('expected --graph mermaid')
+  if (values.graph && (values.format || values.json || values.names || command || values['compare-shadow'])) fail('--graph cannot be combined with other output formats or a command')
 
   if (values['compare-shadow'] || values.results) {
     if (!values['compare-shadow'] || !values.results) fail('--compare-shadow and --results must be used together')
@@ -222,6 +227,7 @@ async function main(argv: string[]) {
       ...(globals.length && { globals }),
       uncommitted: !values.committed,
       types: values['no-types'] ? false : config.types ?? true,
+      ...(values.graph && { graph: 'mermaid' }),
       ...(strict && { strict: true }),
       ...(values.trace && { trace: traceEdges(values.trace) }),
     })
@@ -235,6 +241,8 @@ async function main(argv: string[]) {
   if (values['github-output']) append('GITHUB_OUTPUT', githubOutput(result, entries))
   if (values['github-summary']) append('GITHUB_STEP_SUMMARY', githubSummary(result, base === 'auto' ? detectBase() : base))
 
+  if (values['github-summary'] && result.mermaid) append('GITHUB_STEP_SUMMARY', '\n' + result.mermaid + '\n')
+
   if (command) {
     const hit = result.hit.length
     const total = result.entries.length
@@ -246,7 +254,7 @@ async function main(argv: string[]) {
     exec(hit === total ? everything(command) : substitute(command, selectedPaths(result, entries), result.hit))
   }
 
-  const text = render(result, entries, format, tests)
+  const text = result.mermaid ?? render(result, entries, format, tests)
   if (text) console.log(text)
   if (values['exit-code']) process.exitCode = result.any ? 0 : 1
 }

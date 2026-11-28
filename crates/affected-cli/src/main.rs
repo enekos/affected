@@ -33,7 +33,9 @@ fn run() -> Result<u8, Error> {
     let options = affected_cli::options(&args, config, Context { cwd, env: &env, stdin: &mut stdin })?;
     let report = affected_core::analyze(&options).map_err(|error| Error::Failed(error.to_string()))?;
 
-    let output = if args.json {
+    let output = if args.mermaid {
+        report.mermaid() + "\n"
+    } else if args.json {
         render::json(&report).map_err(|error| Error::Failed(error.to_string()))? + "\n"
     } else if args.names {
         render::hit_names(&report).flat_map(|name| [name, "\n"]).collect()

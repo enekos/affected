@@ -21,6 +21,7 @@ Options:
   --strict                    Select entries with incomplete analysis when any files changed
   --trace <file>              Read traced edges [{from,to,revision?}] from JSON
   --config <file>             Read entries, globals, base, strict and types from JSON (default: ./affected.config.json)
+  --graph mermaid             Print the impact diagram as fenced Markdown
   --json                      Print the full report as JSON
   --names                     Print the names of the hit entries, one per line
   --github-output             Append affected, any, files, matrix, count and total to $GITHUB_OUTPUT
@@ -77,6 +78,7 @@ pub struct Args {
     pub inputs: Vec<(String, String)>,
     pub json: bool,
     pub names: bool,
+    pub mermaid: bool,
     pub github_output: bool,
     pub exit_code: bool,
 }
@@ -127,6 +129,12 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, Error>
             Short('i') | Long("input") => {
                 args.inputs.push(pair(parser.value().map_err(usage)?.string().map_err(usage)?, "--input")?);
             }
+            Long("graph") => {
+                if parser.value().map_err(usage)? != "mermaid" {
+                    return Err(Error::Usage("expected --graph mermaid".into()));
+                }
+                args.mermaid = true;
+            }
             Long("json") => args.json = true,
             Long("names") => args.names = true,
             Long("github-output") => args.github_output = true,
@@ -138,6 +146,9 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, Error>
             }
             _ => return Err(usage(arg.unexpected())),
         }
+    }
+    if args.mermaid && (args.json || args.names) {
+        return Err(Error::Usage("--graph cannot be combined with other output formats".into()));
     }
     Ok(if help {
         Command::Help
