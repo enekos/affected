@@ -55,6 +55,12 @@ To only decide whether a job runs, leave `run` empty and use the outputs:
         if: contains(fromJSON(steps.affected.outputs.affected), 'prompts')
 ```
 
+## Diagram the changes in a pull request
+
+Run `affected --base origin/main -e 'src/**/*.test.ts' --graph mermaid` to print a fenced Markdown diagram. Supply your own named entries to show app or package impact. Paste the output in a PR, or add `--github-summary` in the Node CLI to append it to the job summary. The JS API accepts `graph: 'mermaid'` and returns the Markdown in `result.mermaid`.
+
+Edges point from the changed input toward its consumers. Each selected entry shows one shortest chain, with base or head labels, plus its other known hits. A strict fallback appears separately from a known dependency. The diagram caps entries, long paths and additional files with counts. Use `--json` for the complete selection.
+
 ## Fetch enough history
 
 `affected` needs the merge base of your branch and its target. A default shallow checkout has none, and

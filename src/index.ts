@@ -74,6 +74,8 @@ export interface AffectedOptions<Name extends string = string> {
   types?: boolean
   /** Select uncertain entries on a nonempty diff. */
   strict?: boolean
+  /** Include the fenced PR impact diagram in the result. */
+  graph?: 'mermaid'
   trace?: readonly TraceEdge[]
   /** Globs (relative to `cwd`) whose changes hit every entry, such as a shared config. */
   globals?: readonly string[]
@@ -104,7 +106,10 @@ export class Affected<Name extends string = string> {
   readonly entries: readonly Entry<Name>[]
   readonly #byName: ReadonlyMap<Name, Entry<Name>>
 
-  constructor(report: { changed: string[]; entries: StoredEntry[] }) {
+  readonly mermaid?: string
+
+  constructor(report: { changed: string[]; entries: StoredEntry[]; mermaid?: string }) {
+    if (report.mermaid !== undefined) this.mermaid = report.mermaid
     this.changed = report.changed
     this.entries = report.entries.map(entry => ({
       name: entry.name as Name,
@@ -178,7 +183,7 @@ function toNativeEntry([name, input]: [string, EntryInput]): Native.NativeEntry 
   return { name, paths: toPaths(from), ...(inputs !== undefined && { inputs: [...inputs] }) }
 }
 
-function toNative({ cwd, entries, base, changed, uncommitted, types, globals, strict, trace }: AffectedOptions): Native.NativeOptions {
+function toNative({ cwd, entries, base, changed, uncommitted, types, globals, strict, trace, graph }: AffectedOptions): Native.NativeOptions {
   return {
     cwd: cwd ?? process.cwd(),
     entries: Object.entries<EntryInput>(entries).map(toNativeEntry),
@@ -187,6 +192,7 @@ function toNative({ cwd, entries, base, changed, uncommitted, types, globals, st
     ...(uncommitted !== undefined && { uncommitted }),
     ...(types !== undefined && { types }),
     ...(strict !== undefined && { strict }),
+    ...(graph && { mermaid: true }),
     ...(trace && { trace: [...trace] }),
     ...(globals !== undefined && { globals: [...globals] }),
   }

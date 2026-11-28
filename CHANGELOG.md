@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+- Both CLIs support `--graph mermaid` for a bounded PR impact diagram with revision-labelled chains, strict fallbacks and unmatched changes.
+
 ## [0.2.0] - 2026-11-27
 
 - `affected tests` asks Vitest (3+) or Jest which test files and setup files it would run, and makes one entry per test file. Setup files are extra roots of each entry; runner configs are globals.

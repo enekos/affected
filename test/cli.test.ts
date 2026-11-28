@@ -219,3 +219,38 @@ test('the GitHub Action deepens a shallow pull request checkout and runs the sel
   assert.match(readFileSync(output, 'utf8'), /^affected=\["src\/a.test.ts"\]\nany=true\nfiles=\["src\/a.test.ts"\]\n/)
   assert.match(readFileSync(summary, 'utf8'), /1 of 3 selected/)
 })
+
+test('Mermaid shares dependency nodes, labels base edges and accounts for every changed input', t => {
+  const { root, run, write } = repo(t, { ...suite, 'second.ts': "import './src/a'", 'old.ts': 'export {}',
+    'removed.ts': "import './old'" })
+  write({ 'removed.ts': 'export {}', 'old.ts': 'export const n = 1', 'src/b.ts': 'export const b = 2',
+    'readme.md': 'docs', 'any.ts': "import(variable)" })
+  const args = ['-e', 'alpha=src/a.test.ts', '-e', 'beta=second.ts', '-e', 'old=removed.ts',
+    '-e', 'strict=any.ts', '-e', 'label"\u0060#=src/c.test.ts', '-i', 'label"\u0060#=src/b.ts']
+  // Give the uncertain entry an existing root, so selection comes from strict mode.
+  execFileSync('git', ['-C', root, 'add', 'any.ts'])
+  execFileSync('git', ['-C', root, 'commit', '-qm', 'add unknown entry'])
+  const summary = join(root, 'summary.md')
+  const result = run([...args, '-b', 'HEAD', '--strict', '--graph', 'mermaid', '--github-summary'], { GITHUB_STEP_SUMMARY: summary })
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /^```mermaid\nflowchart LR/)
+  assert.equal(result.stdout.match(/Changed · src\/b.ts/g)?.length, 1)
+  const baseOnly = run(['-e', 'old=removed.ts', '-b', 'HEAD', '-c', 'old.ts', '--graph', 'mermaid'])
+  assert.equal(baseOnly.status, 0, baseOnly.stderr)
+  assert.match(baseOnly.stdout, /\|base\|/)
+  assert.match(result.stdout, /configured input/)
+  assert.match(result.stdout, /Incomplete analysis/)
+  assert.match(result.stdout, /No known consumer/)
+  assert.match(result.stdout, /label#34;#96;#35;/)
+  assert.ok(readFileSync(summary, 'utf8').endsWith(result.stdout))
+  assert.equal(run([...args, '-b', 'HEAD', '--graph', 'dot']).status, 2)
+})
+
+test('Mermaid bounds fan-out while the JSON report keeps the whole selection', t => {
+  const { run } = repo(t, suite)
+  const args = Array.from({length: 25}, (_, i) => ['-e', 'app' + i + '=src/a.ts']).flat()
+  const graph = run([...args, '-c', 'src/b.ts', '--graph', 'mermaid'])
+  assert.equal(graph.status, 0, graph.stderr)
+  assert.match(graph.stdout, /5 additional entries/)
+  assert.equal(JSON.parse(run([...args, '-c', 'src/b.ts', '--json']).stdout).entries.length, 25)
+})
