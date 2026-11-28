@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, isAbsolute, join, posix, relative, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { PlaywrightInventory } from './playwright-reporter.ts'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -189,10 +189,10 @@ function removedScripts(cwd: string, diff: DiscoverOptions): string[] {
   // Resolve the ref before passing it to diff. Git emits paths relative to the worktree root.
   const git = (args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: MAX_LIST_BYTES })
   const base = git(['rev-parse', '--verify', '--end-of-options', diff.base + '^{commit}']).trim()
-  const root = git(['rev-parse', '--show-toplevel']).trimEnd()
+  const prefix = git(['rev-parse', '--show-prefix']).replace(/\r?\n$/, '')
   const args = ['diff', '--merge-base', '--no-renames', '--diff-filter=D', '--name-only', '-z', '--no-relative', base]
   if (diff.uncommitted === false) args.push('HEAD')
-  return git([...args, '--']).split('\0').filter(Boolean).map(file => relative(cwd, join(root, file)).split(sep).join('/'))
+  return git([...args, '--']).split('\0').filter(Boolean).map(file => posix.relative('/' + prefix, '/' + file))
 }
 
 function playwright(cwd: string, config: string | undefined, diff: DiscoverOptions): TestSuite {
@@ -211,7 +211,7 @@ function playwright(cwd: string, config: string | undefined, diff: DiscoverOptio
       visited.add(name)
       for (const dependency of inventory.projects.filter(p => p.name === name)) {
         for (const file of removed) {
-          const rel = relative(dependency.dir, resolve(cwd, file))
+          const rel = relative(canonical(dependency.dir), resolve(canonical(cwd), file))
           if (rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel) || !/\.[cm]?[jt]sx?$/.test(rel)) continue
           if (diff.base) setup.add(file)
           else globals.push(file.replace(/[\[\]{}?*]/g, '?'))

@@ -300,7 +300,11 @@ test('real Playwright collection preserves project identity, transitive setup an
   rmSync(join(root, 'specs/seed.spec.js'))
   const deleted = run(['tests', '-b', 'HEAD', '--names'])
   assert.equal(deleted.status, 0, deleted.stderr)
-  assert.match(deleted.stdout, /\[private\]/)
+  if (!deleted.stdout.includes('[private]')) {
+    const inventory = await discoverTests({ cwd: root, runner: 'playwright', base: 'HEAD' })
+    const report = affected({ cwd: root, entries: testEntries(inventory), base: 'HEAD', types: false, strict: true })
+    assert.fail(JSON.stringify({ changed: report.changed, private: inventory.files.find(file => file.project === 'private'), output: deleted.stdout }))
+  }
   assert.doesNotMatch(deleted.stdout, /\[public\]/)
 
   // Playwright matches the spec for collection and the declaration file for each test.
